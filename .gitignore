@@ -1,0 +1,20 @@
+# Build output
+node_modules/
+dist/
+build/
+out/
+
+# Environment and secrets (banned from this repo, see CONTRIBUTING.md)
+.env
+.env.*
+!.env.example
+
+# Logs and caches
+*.log
+npm-debug.log*
+.cache/
+graphify-out/
+
+# OS noise
+Thumbs.db
+.DS_Store
