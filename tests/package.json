@@ -1,0 +1,13 @@
+{
+  "name": "platform-core-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Test dependencies for Platform Core (coder-2 smoke, fixture capture, secret scan, and headless UI checks).",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "playwright": "1.47.0"
+  }
+}

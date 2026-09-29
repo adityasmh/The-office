@@ -1,6 +1,6 @@
 # Tests
 
-This directory contains the coder-2 smoke, fixture-capture, and secret-scan checks.
+This directory contains the coder-2 smoke, fixture-capture, secret-scan, and headless UI checks.
 
 ## Run commands
 
@@ -17,4 +17,18 @@ node tests/smoke.mjs
 node tests/secret-scan.mjs
 ```
 
-All three scripts are plain Node ESM and have no external dependencies.
+## Headless UI check
+
+The headless browser test uses Playwright (pinned in `tests/package.json`). It starts a local static server, loads `/` and `/?ui=legacy`, asserts there are no console errors or 404 network responses, and exercises `updateProjectStatus` through the adapter on the detail view.
+
+```powershell
+# Install test dependencies (one time)
+cd tests
+npm install
+
+# Run the headless UI check from the repository root
+cd ..
+node tests/ui-headless.mjs
+```
+
+All scripts are plain Node ESM. The headless UI check is the only test with an external dependency (Playwright).

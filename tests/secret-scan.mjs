@@ -17,6 +17,11 @@ function isEnvFile(name) {
   return name === '.env' || /^\.env\./.test(name);
 }
 
+function isPlaceholderEnvFile(name) {
+  // Allowlist example / placeholder env files such as .env.example or .env.local.example.
+  return /^\.env(\..+)?\.example$/.test(name);
+}
+
 function* walk(dir) {
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -65,6 +70,11 @@ let hits = 0;
 for (const filePath of files) {
   if (filePath === scannerPath) continue;
   const name = basename(filePath);
+  if (isPlaceholderEnvFile(name)) {
+    // Skip example/placeholder env files entirely; they document required variables
+    // without containing real secrets.
+    continue;
+  }
   if (isEnvFile(name)) {
     console.log(`HIT: .env file detected: ${filePath}`);
     hits += 1;
