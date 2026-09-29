@@ -1,0 +1,32 @@
+{
+  "description": "loadProjects -> updateProjectStatus(alpha, \"complete\") -> getProjectById(alpha)",
+  "initialSnapshot": [
+    {
+      "id": "alpha",
+      "status": "on-track"
+    },
+    {
+      "id": "data-pipeline",
+      "status": "at-risk"
+    },
+    {
+      "id": "security",
+      "status": "active"
+    },
+    {
+      "id": "reliability",
+      "status": "paused"
+    }
+  ],
+  "updated": {
+    "id": "alpha",
+    "status": "complete",
+    "updatedAt": "2026-09-29T12:51:56.785Z"
+  },
+  "fetched": {
+    "id": "alpha",
+    "status": "complete",
+    "updatedAt": "2026-09-29T12:51:56.785Z"
+  },
+  "sameReference": true
+}

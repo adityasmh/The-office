@@ -3,30 +3,43 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Platform Core - Projects</title>
-  <link rel="stylesheet" href="css/styles.css" />
+  <title>Platform Core — AgentOffice</title>
+  <link rel="stylesheet" href="css/agent-office.css" />
+  <script>
+    if (window.location.search.indexOf('ui=legacy') !== -1) {
+      window.location.replace('legacy/index.html' + window.location.hash);
+    }
+  </script>
 </head>
 <body>
-  <header class="app-header">
-    <div class="brand">Platform Core</div>
-    <nav class="main-nav" aria-label="Main">
-      <a href="#/overview" class="nav-link" data-route="overview">Overview</a>
-      <a href="#/projects" class="nav-link" data-route="projects">Projects</a>
+  <header class="ao-header">
+    <div class="ao-brand">
+      <img src="public/assets/agent.png" alt="" class="ao-logo" />
+      <div>
+        <div class="ao-brand-name">Platform Core</div>
+        <div class="ao-brand-tag">AgentOffice edition</div>
+      </div>
+    </div>
+    <nav class="ao-nav" aria-label="Main">
+      <a href="?view=overview" class="ao-nav-link" data-view="overview">Overview</a>
+      <a href="?view=list" class="ao-nav-link" data-view="list">Projects</a>
+      <a href="legacy/index.html" class="ao-nav-link ao-legacy-link">Legacy UI</a>
     </nav>
   </header>
 
-  <main class="app-main">
+  <main class="ao-main">
     <div id="root"></div>
   </main>
 
-  <footer class="app-footer">Laya AI Company · Platform Core</footer>
+  <footer class="ao-footer">
+    <span>Laya AI Company · AgentOffice theme (MIT)</span>
+    <a href="legacy/index.html">Open legacy UI</a>
+  </footer>
 
-  <script src="js/ui.js"></script>
+  <!-- Existing data layer is preserved untouched; adapter re-exposes the contract. -->
   <script src="js/data.js"></script>
-  <script src="js/views/overview.js"></script>
-  <script src="js/views/list.js"></script>
-  <script src="js/views/detail.js"></script>
-  <script src="js/router.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/agent-office-adapter.js"></script>
+  <script src="js/agent-office-app.js"></script>
 </body>
 </html>
