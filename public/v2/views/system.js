@@ -27,6 +27,16 @@
 //   POST /company/system/snapshot          { checkpoints?:bool }
 //   POST /company/system/shutdown          { confirm:true }
 //   POST /company/system/resume            { sessionIds:[...], snapshotTs }
+//
+// LAYA-CTL/U-X (the "Laya (decision model)" panel):
+//   GET  /company/laya                     { ok, device, checkpointDevices, cpuFallbacks,
+//                                             pids, gpu, layaGpuMiB, requestedDevice,
+//                                             starting, lastStartError, gpuHeadroom,
+//                                             fallbackNotice }
+//   POST /company/laya/stop                stop ONLY Laya's python processes
+//   POST /company/laya/start               { device: "gpu" | "cpu" }
+//   POST /company/laya/switch              { device } - stop, wait for health down, then start
+//                                          the other device as one action
 
 export const title = "System";
 
@@ -80,6 +90,17 @@ function mb(n) {
   const v = Number(n);
   if (!isFinite(v)) return "?";
   return v >= 1024 ? (v / 1024).toFixed(1) + " GB" : Math.round(v) + " MB";
+}
+
+// LAYA-UX helpers: plain words for a device, and mm:ss for the elapsed load time.
+function deviceWord(d) {
+  return d === "cpu" ? "CPU" : d === "gpu" ? "GPU" : "unknown";
+}
+function fmtElapsed(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return (m < 10 ? "0" : "") + m + ":" + (r < 10 ? "0" : "") + r;
 }
 
 function countsLine(c) {
@@ -149,8 +170,10 @@ export function mount(el, ctx) {
   // LAYA-CTL: the "Laya (decision model)" panel (GET /company/laya).
   let laya = null;
   let layaBusy = false;
+  let layaBusyAct = ""; // which button is in flight: stop | switch | start-gpu | start-cpu
   let layaError = "";
   let layaNote = "";
+  let layaStartAt = 0; // local clock for "Elapsed mm:ss" while a start is in progress
   let offAt = 0;
   try { offAt = Number(localStorage.getItem(LS_OFF) || 0); } catch { offAt = 0; }
 
@@ -181,11 +204,17 @@ export function mount(el, ctx) {
     return s;
   }
 
-  // LAYA-CTL: Laya status. ttl:0 bypasses the shared GET cache so the 5 s poll is live.
+  // LAYA-CTL: Laya status. ttl:0 bypasses the shared GET cache so the poll is live.
+  // LAYA-UX: keep a local clock for the elapsed time while a start is loading.
   async function loadLaya() {
     try {
       laya = await api("/company/laya", { ttl: 0 });
       layaError = "";
+      if (laya && laya.starting) {
+        if (!layaStartAt) layaStartAt = Date.now() - (Number(laya.starting.sinceSec) || 0) * 1000;
+      } else {
+        layaStartAt = 0;
+      }
     } catch (e) {
       layaError = "Could not read Laya status: " + msg(e);
     }
@@ -217,13 +246,17 @@ export function mount(el, ctx) {
     return '<div class="sys-grid">' + tiles + "</div>" + paused;
   }
 
-  // LAYA-CTL: the "Laya (decision model)" panel. Health/device/pids from GET /company/laya;
-  // a GPU memory bar (used / total, plus Laya's own share when the compute-apps query works);
-  // Stop (with a confirm whose words say routing falls back while Laya is down) and the two
-  // Start buttons. Start is disabled while Laya answers, Stop while it does not.
+  // LAYA-UX: the "Laya (decision model)" panel. Health/device/pids from GET /company/laya.
+  // Buttons follow the state, and every one of them is usable exactly when it should be:
+  //   - Laya down:            Start on GPU (with a headroom line when VRAM is tight), Start on CPU
+  //   - starting (item 2):    "Starting on GPU. Loading models, usually 1 to 7 minutes. Elapsed
+  //                           mm:ss", Start/Switch disabled, Stop enabled to cancel the start
+  //   - Laya up:              Switch to <the other device> (one confirm, one action) + Stop
+  // A failed start (item 3), a CPU fallback (item 5) and every error show in plain words.
   function renderLayaPanel() {
     const L = laya || {};
     const ok = L.ok === true;
+    const starting = L.starting || null;
     const dev = !L.device ? "unknown" : (/cuda|gpu|nvidia/i.test(L.device) ? "GPU" : "CPU");
     const pids = (L.pids || []).join(", ") || "none";
     const loaded = (L.loaded || []).length ? (L.loaded || []).join(", ") : "none loaded";
@@ -243,23 +276,49 @@ export function mount(el, ctx) {
     } else {
       gpuRows = '<div class="muted">GPU memory unavailable (nvidia-smi not found).</div>';
     }
-    const buttons =
-      '<button class="btn sys-danger" data-act="laya-stop"' + (ok && !layaBusy ? "" : " disabled") + ">Stop Laya (free the GPU)</button>" +
-      '<button class="btn btn-primary" data-act="laya-start-gpu"' + (!ok && !layaBusy ? "" : " disabled") + ">Start on GPU</button>" +
-      '<button class="btn" data-act="laya-start-cpu"' + (!ok && !layaBusy ? "" : " disabled") + ">Start on CPU</button>";
+
+    // Item 4: the headroom line only matters when a GPU start or a switch to GPU is on offer.
+    const gpuActionOffered = !ok || dev === "CPU";
+    const headroom = gpuActionOffered && L.gpuHeadroom ? '<div class="sys-warn">' + esc(L.gpuHeadroom) + "</div>" : "";
+
+    // Items 1 and 2: exactly the buttons the current state allows (item 7: busy state per button).
+    const off = layaBusy ? " disabled" : "";
+    const label = (act, text) => (layaBusyAct === act ? "Working…" : text);
+    let buttons;
+    let stateLine = "";
+    if (starting) {
+      const since = layaStartAt ? Math.round((Date.now() - layaStartAt) / 1000) : (Number(starting.sinceSec) || 0);
+      stateLine = '<div class="sys-warn">Starting on ' + esc(deviceWord(starting.device)) +
+        ". Loading models, usually 1 to 7 minutes. Elapsed " + esc(fmtElapsed(since)) + ".</div>";
+      buttons = '<button class="btn sys-danger" data-act="laya-stop"' + off + ">" + label("stop", "Stop (cancels the start)") + "</button>";
+    } else if (ok) {
+      const other = dev === "GPU" ? "cpu" : "gpu";
+      buttons =
+        '<button class="btn btn-primary" data-act="laya-switch" data-device="' + other + '"' + off + ">" + label("switch", "Switch to " + deviceWord(other)) + "</button>" +
+        '<button class="btn sys-danger" data-act="laya-stop"' + off + ">" + label("stop", "Stop (free the GPU)") + "</button>";
+    } else {
+      buttons =
+        '<button class="btn btn-primary" data-act="laya-start-gpu"' + off + ">" + label("start-gpu", "Start on GPU") + "</button>" +
+        '<button class="btn" data-act="laya-start-cpu"' + off + ">" + label("start-cpu", "Start on CPU") + "</button>";
+    }
+
     return (
       '<h2 style="margin-top:18px">Laya (decision model)</h2>' +
       '<div class="card">' +
       '<div class="sys-row">' +
-      '<strong>' + (ok ? '<span class="sys-ok">healthy</span>' : '<span class="sys-err">not answering</span>') + "</strong>" +
-      '<span class="muted">device: ' + esc(dev) + "</span>" +
+      '<strong>' + (ok ? '<span class="sys-ok">healthy</span>' : starting ? '<span class="sys-warn">starting</span>' : '<span class="sys-err">not answering</span>') + "</strong>" +
+      '<span class="muted">device in use: ' + esc(dev) + "</span>" +
       '<span class="muted">pids: ' + esc(pids) + "</span>" +
       '<span class="muted">checkpoints: ' + esc(loaded) + "</span>" +
       "</div>" +
       gpuRows +
+      headroom +
+      (L.fallbackNotice ? '<div class="sys-warn">' + esc(L.fallbackNotice) + "</div>" : "") +
+      stateLine +
       '<div class="sys-row" style="margin-top:8px">' + buttons + "</div>" +
       (layaBusy ? '<div class="muted">Working…</div>' : "") +
       (layaNote ? '<div class="muted">' + esc(layaNote) + "</div>" : "") +
+      (L.lastStartError ? '<div class="sys-err sys-mono">' + esc(L.lastStartError) + "</div>" : "") +
       (layaError ? '<div class="sys-err">' + esc(layaError) + "</div>" : "") +
       "</div>"
     );
@@ -453,13 +512,14 @@ export function mount(el, ctx) {
     render();
   }
 
-  // LAYA-CTL: stop Laya after a confirm that names the routing consequence.
+  // LAYA-CTL/U-X: stop Laya after a confirm that names the routing consequence.
   async function stopLayaNow() {
     const sure = window.confirm(
       "Stop Laya? Routing will use fallbacks while Laya is down, so decisions are made without the local model until you start it again.",
     );
     if (!sure) return;
     layaBusy = true;
+    layaBusyAct = "stop";
     layaError = "";
     layaNote = "";
     render();
@@ -474,25 +534,69 @@ export function mount(el, ctx) {
       layaError = "Could not stop Laya: " + msg(e);
     }
     layaBusy = false;
+    layaBusyAct = "";
     render();
+    startLayaWatch();
   }
 
-  // LAYA-CTL: start Laya on GPU or CPU. Returns at once; /company/laya is polled every 5 s
-  // so the panel shows when it becomes healthy (loading takes minutes).
+  // LAYA-CTL/U-X: start Laya on GPU or CPU. Returns at once; /company/laya is polled every 3 s
+  // while it loads (5 s otherwise) so the panel shows the elapsed time and when it is healthy.
   async function startLayaNow(device) {
     layaBusy = true;
+    layaBusyAct = "start-" + device;
     layaError = "";
-    layaNote = "Starting Laya on " + (device === "cpu" ? "CPU" : "GPU") + " — loading takes a few minutes; this page refreshes every 5 s.";
+    layaNote = "Starting Laya on " + deviceWord(device) + ". Loading models, usually 1 to 7 minutes.";
     render();
     try {
       const r = await api("/company/laya/start", { method: "POST", body: { device: device } });
-      if (r && r.refused) layaError = "Laya was not started: " + (r.reason || "it is already answering");
+      if (r && r.refused) {
+        layaError = "Laya was not started: " + (r.reason || "it is already answering") + ".";
+        layaNote = "";
+      }
       await loadLaya();
     } catch (e) {
       layaError = "Could not start Laya: " + msg(e);
     }
     layaBusy = false;
+    layaBusyAct = "";
     render();
+    startLayaWatch();
+  }
+
+  // LAYA-UX item 1: switch device as ONE action behind ONE confirm: stop, wait for health to go
+  // down (max 15 s, done by the server), then start on the other device. The words say what will
+  // happen and that routing uses fallbacks while Laya reloads. If stopping fails, nothing starts.
+  async function switchLayaNow(device) {
+    const to = deviceWord(device);
+    const sure = window.confirm(
+      "Switch Laya to " + to + "?\n\n" +
+      "Laya will be stopped first and then started on " + to + ". Routing will use fallbacks while Laya reloads " +
+      "(usually 1 to 7 minutes), so decisions are made without the local model until it is healthy again.\n\n" +
+      "If stopping fails, Laya is NOT started again.",
+    );
+    if (!sure) return;
+    layaBusy = true;
+    layaBusyAct = "switch";
+    layaError = "";
+    layaNote = "Switching Laya to " + to + " (stopping first, then starting).";
+    render();
+    try {
+      const r = await api("/company/laya/switch", { method: "POST", body: { device: device } });
+      if (r && r.switched) {
+        layaNote = "Laya is now starting on " + to + ". Loading models, usually 1 to 7 minutes.";
+        layaStartAt = 0;
+      } else {
+        layaError = "Switch to " + to + " did not finish: " + ((r && r.reason) || "unknown reason");
+        layaNote = "";
+      }
+      await loadLaya();
+    } catch (e) {
+      layaError = "Could not switch Laya: " + msg(e);
+    }
+    layaBusy = false;
+    layaBusyAct = "";
+    render();
+    startLayaWatch();
   }
 
   async function toggleSnapshot(ts) {
@@ -603,6 +707,7 @@ export function mount(el, ctx) {
         else if (act === "cancel") { mode = "idle"; plan = null; render(); }
         else if (act === "snapshot") snapshotNow();
         else if (act === "laya-stop") stopLayaNow();
+        else if (act === "laya-switch") switchLayaNow(b.getAttribute("data-device"));
         else if (act === "laya-start-gpu") startLayaNow("gpu");
         else if (act === "laya-start-cpu") startLayaNow("cpu");
         else if (act === "toggle") toggleSnapshot(ts);
@@ -620,14 +725,20 @@ export function mount(el, ctx) {
 
   /* ------------------------------------------------------------------ boot */
 
-  // LAYA-CTL: refresh the Laya panel's status line every 5 s while the page is open.
-  function startLayaWatch() {
+  // LAYA-CTL/U-X: refresh the Laya panel every 3 s while a start is loading (so the elapsed
+  // time moves), and every 5 s otherwise. Changing cadence restarts the poll at the new rate.
+  function stopLayaWatch() {
     if (stopLayaPoll) { try { stopLayaPoll(); } catch { /* ignore */ } stopLayaPoll = null; }
+  }
+  function startLayaWatch() {
+    const ms = laya && laya.starting ? 3000 : 5000;
+    stopLayaWatch();
     stopLayaPoll = poll(async () => {
       if (stopped || mode === "off" || mode === "shutdown") return;
       await loadLaya();
       render();
-    }, 5000);
+      if (((laya && laya.starting) ? 3000 : 5000) !== ms) startLayaWatch();
+    }, ms);
   }
 
   void (async () => {
@@ -656,6 +767,6 @@ export function mount(el, ctx) {
   return function cleanup() {
     stopped = true;
     stopWatch();
-    if (stopLayaPoll) { try { stopLayaPoll(); } catch { /* ignore */ } stopLayaPoll = null; }
+    stopLayaWatch();
   };
 }

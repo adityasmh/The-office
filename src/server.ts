@@ -50,7 +50,8 @@ import {
   startResume, startShutdown, systemStatus, takeSnapshot,
 } from "./company/lifecycle.js";
 // LAYA-CTL: status, stop and start controls for the Laya decision server (System page panel).
-import { layaStatus, startLaya, stopLaya } from "./company/layaControl.js";
+// LAYA-UX: `switchLaya()` is the one-action stop-then-start-the-other-device path.
+import { layaStatus, startLaya, stopLaya, switchLaya } from "./company/layaControl.js";
 import {
   briefingStatus, getBriefing, markBriefingSeen, refreshBriefing, startBriefingWatcher, stopBriefingWatcher,
 } from "./company/briefing.js";
@@ -1786,6 +1787,18 @@ app.post("/company/laya/start", async (req, res) => {
     return res.status(400).json({ error: 'device must be "gpu" or "cpu"' });
   }
   try { res.json(await startLaya({ device })); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// LAYA-UX: one action behind the panel's single confirm. Stops Laya, waits up to 15 s for
+// /health to go down, then starts the other device. The body's `device` is only a hint for
+// the case where health cannot say which device Laya is on; the module derives the target.
+app.post("/company/laya/switch", async (req, res) => {
+  const { device } = (req.body ?? {}) as { device?: string };
+  if (device !== undefined && device !== "gpu" && device !== "cpu") {
+    return res.status(400).json({ error: 'device must be "gpu" or "cpu"' });
+  }
+  try { res.json(await switchLaya(device ? { device } : {})); }
   catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
