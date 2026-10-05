@@ -20,3 +20,4 @@ Every item below comes from a real gap seen today, not a guess. Each would be a 
 
 ## Not recommended
 - Auto-merge of fleet PRs. The merge gate should stay human.
+Next up: item 1, auto-fill owns for small orders.
