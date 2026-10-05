@@ -48,3 +48,9 @@ One real small order with two workers where worker 2 asks worker 1 one question,
 
 ## Open decision for the CEO
 Delivery in step A decides how reliable this is. If no targeted mechanism exists, the safe fallback is note-only talk (workers leave notes that peers read at their two inbox reads, no live interruption). That is much simpler and cannot disturb a running session.
+
+## Step A result (2026-10-06, see docs/AGENT_TALK_STEP_A.md)
+- Live delivery works ONLY for an idle session with a connected TUI client: `jcode transcript --mode send -S <sessionId>`, text on stdin, verified in the session snapshot in about 0.4 s. It never reads or changes the CEO focus file.
+- A message sent while the target was generating left no trace (not queued, probably lost). Rule: deliver only when idle, re-check idleness right before sending, verify in BOTH `sessions/<id>.json` and the journal, and treat the mailbox plus the two fixed inbox reads as the guaranteed path.
+- Needs a per-session lock (not a global mutex). Never use the focus-based fallback for talk.
+- Decision: build the mailbox first (step B), live idle delivery as an optional layer (step C). Not yet measured: quotes/newline/unicode intactness, and `jcode debug -S <id> message:` as a cleaner path.
