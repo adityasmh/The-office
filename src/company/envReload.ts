@@ -31,6 +31,12 @@ export const RELOADABLE_ENV_KEYS = [
   "MAX_PARALLEL_SESSIONS",
   "MIN_FREE_RAM_MB",
   "FLEET_AUTO_APPROVE",
+  // F09: the webhook notification settings. The URL is allow-listed like a token: it can carry
+  // a secret in its path, on purpose, and reloadEnv never returns or logs a value.
+  "NOTIFY_WEBHOOK_URL",
+  "NOTIFY_FORMAT",
+  "NOTIFY_EVENTS",
+  "NOTIFY_DRY_RUN",
 ] as const;
 
 export type ReloadEnvResult = {

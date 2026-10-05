@@ -1,0 +1,12 @@
+{
+  "protectedPaths": [
+    ".env*",
+    "!.env.example",
+    ".github/workflows/**",
+    ".git/**",
+    "policy.json",
+    "*.pem",
+    "*.key"
+  ],
+  "maxFilesPerWorkOrder": 20
+}

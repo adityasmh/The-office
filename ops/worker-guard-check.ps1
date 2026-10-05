@@ -190,6 +190,9 @@ function Spawn-Real([string]$dir, [string]$name, [string]$message, [string]$exe,
 }
 
 $env:JCODE_WORKER_BALANCE_USD = "5"
+# These cases test the credit path (balance floor, deepseek argv). Since 2026-10-06 the wrapper
+# picks OpenCode Go by default (routing policy), so pin the provider for the whole self-test.
+$env:JCODE_WORKER_PROVIDER = "deepseek"
 
 Write-Output "=== worker-guard-check ==="
 

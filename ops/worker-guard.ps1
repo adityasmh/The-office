@@ -330,6 +330,9 @@ function Test-RepeatRule($st) {
         if ($counts.ContainsKey($p)) { $counts[$p] = $counts[$p] + 1 } else { $counts[$p] = 1 }
     }
     foreach ($k in $counts.Keys) {
+        # A bare file path is the tool echoing which file it read; reading the same file six
+        # times is normal work, not a loop (it killed a spec writer on 2026-10-06).
+        if ($k -match '^[A-Za-z0-9_\-\\/\.: ]+\.(ts|tsx|js|mjs|md|json|ps1|html|css|yml|yaml|txt|bat)$') { continue }
         if ($counts[$k] -ge 6) { return ("repeat-line x" + $counts[$k]) }
     }
     return $null

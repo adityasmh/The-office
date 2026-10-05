@@ -6,7 +6,7 @@ Open-source developer feature for the Laya fleet. Researched need: see docs/over
 `ops/setup.ts`, `ops/setup-check.ts`
 
 ## What to build
-`npx tsx ops/setup.ts [--dir <path>] [--live] [--force]`: if `.env` is missing, copy `.env.example` to `.env`; set `MOCK_MODE=1` unless `--live` is given (so a first run costs nothing); if `COMPANY_AUTH_TOKEN` is empty or a placeholder, fill it with a random 32-byte hex value from `node:crypto`; create `company/` and `logs/` if missing. NEVER overwrite an existing `.env` unless `--force`, and then write `.env.bak` first. Never print any secret value; print only what was done and the next steps (run the doctor, start the server, open the dashboard URL). `--dir` lets tests run in a temp folder.
+`npx tsx ops/setup.ts [--dir <path>] [--live] [--force]`: if `.env` is missing, copy `.env.example` to `.env`; set `MOCK_MODE=1` unless `--live` is given (so a first run costs nothing); if `COMPANY_AUTH_TOKEN` is empty or a template field, fill it with a random 32-byte hex value from `node:crypto`; create `company/` and `logs/` if missing. NEVER overwrite an existing `.env` unless `--force`, and then write `.env.bak` first. Never print any secret value; print only what was done and the next steps (run the doctor, start the server, open the dashboard URL). `--dir` lets tests run in a temp folder.
 
 ## Proof (`ops/setup-check.ts`, temp folders only)
 PASS or FAIL per line: creates `.env` from the example; sets MOCK_MODE=1 by default and not with `--live`; generates a token of the right length and never prints it; refuses to overwrite an existing `.env`; `--force` writes `.env.bak` first; creates the two folders; running twice is safe.

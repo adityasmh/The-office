@@ -63,6 +63,8 @@ if ($lowModel -ne "deepseek-flash" -and $lowModel -ne "deepseek-v4-flash") { Ref
 # ---- provider: ask the routing policy (it knows the OpenCode Go quota), never guess here.
 # DeepSeek direct id is deepseek-flash; the OpenCode Go id for the same model is deepseek-v4-flash.
 $Provider = $Provider.ToLower()
+# Optional override for scripts and tests: JCODE_WORKER_PROVIDER=auto|deepseek|opencode-go
+if ($Provider -eq "auto" -and $env:JCODE_WORKER_PROVIDER -ne $null -and $env:JCODE_WORKER_PROVIDER -ne "") { $Provider = $env:JCODE_WORKER_PROVIDER.ToLower() }
 $providerWhy = "explicit -Provider " + $Provider
 if ($Provider -eq "auto") {
     $Provider = "opencode-go"
@@ -245,6 +247,21 @@ $rec = [ordered]@{
     # (both were already decided and printed above; nothing new is computed here).
     provider = $Provider
     model = $Model
+    # WORKERS-LIVE-2: what this worker was ordered to do (shown on the Terminals page).
+    order = $OrderFile
+    title = $(
+        $ttl = ""
+        try {
+            $of = $OrderFile
+            if ($of -ne "" -and -not [System.IO.Path]::IsPathRooted($of)) { $of = Join-Path $Repo $of }
+            if ($of -ne "" -and (Test-Path -LiteralPath $of)) {
+                $first = [System.IO.File]::ReadLines($of) | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1
+                $ttl = ([string]$first).TrimStart('#',' ').Trim()
+            } elseif ($Message -ne "") { $ttl = ($Message -replace '\s+',' ').Trim() }
+        } catch { }
+        if ($ttl.Length -gt 140) { $ttl = $ttl.Substring(0,140) }
+        $ttl
+    )
 }
 [System.IO.File]::AppendAllText($RegistryPath, (($rec | ConvertTo-Json -Compress) + "`r`n"), $utf8)
 # Provider sidecar (CEO order 2026-10-06): the daily USD cap must count prepaid CREDITS only.

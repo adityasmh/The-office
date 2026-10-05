@@ -34,6 +34,13 @@ import { withBusyAsync } from "./loopWatchdog.js";
 // GH-2 (docs/GITHUB_INTEGRATION_SPEC.md): optional GitHub PR publication for PASSed work
 // orders plus the CI-red downgrade. Off by default (FLEET_GITHUB unset => every call is a no-op).
 import { publishWorkOrder, applyCiDowngrade, type PublishResult } from "./fleetGithub.js";
+// F10: the fleet policy. Protected paths (secrets, CI, policy.json, keys) are never handed to
+// a worker as `owns`, so a small order cannot claim a file the policy reserves for a human.
+import { isProtected, loadPolicy } from "./policy.js";
+// F09: fire-and-forget webhook notifications (discord/slack/ntfy/any endpoint) when an order
+// is done, failed or awaiting the CEO's approval. notify() never throws and never mutates the
+// order, and every call below is guarded so a webhook can never change an order's state.
+import { notify } from "./notify.js";
 
 // ── FLEET ──────────────────────────────────────────────────────────────
 // "Claude manages, jcode executes": the CEO types an order, Claude (manager)
@@ -2105,6 +2112,7 @@ const ORDER_PATH_MAX = 10;
  */
 export function pathsNamedInOrder(text: string, repoDir: string): string[] {
   const root = path.resolve(repoDir);
+  const policy = loadPolicy(repoDir);
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of String(text ?? "").split(/[\s"'`<>()[\]{},;|]+/)) {
@@ -2126,6 +2134,7 @@ export function pathsNamedInOrder(text: string, repoDir: string): string[] {
     if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
     try { if (!fs.statSync(abs).isFile()) continue; } catch { continue; }
     const relNorm = rel.replace(/\\/g, "/");
+    if (isProtected(relNorm, policy)) continue; // F10: CI files, policy.json, keys, secrets stay with the human
     const key = relNorm.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -2437,6 +2446,9 @@ async function planOrder(orderId: string, forceAutoApprove = false): Promise<voi
   pushTrace(order, { from: "Claude (manager)", to: "CEO", what: "plan ready", detail: `${workOrders.length} work order(s), awaiting approval` });
   touched(order);
   saveFleetOrders(orders);
+  // F09: tell the webhook the plan now waits on the CEO. Guarded: a webhook can never change
+  // an order's state.
+  try { void notify("awaiting_approval", order).catch(() => undefined); } catch { /* ignore */ }
 
   // Push the approval question into INBOX now (optional; INBOX also derives it).
   await askCeoViaInbox({
@@ -3226,6 +3238,8 @@ function settleOrder(order: FleetOrder): void {
         wos.map((w) => `- ${w.id} ${w.title}: ${(w.review ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n") +
         (prLines.length ? `\n\nPull requests:\n${prLines.join("\n")}` : ""),
     );
+    // F09: announce the finished order. Guarded: a webhook can never change an order's state.
+    try { void notify("done", order).catch(() => undefined); } catch { /* ignore */ }
     return;
   }
   if (!anyRunning && wos.some((w) => w.state === "needs_manager")) {
@@ -3258,6 +3272,8 @@ function settleOrder(order: FleetOrder): void {
     order.error = wos.filter((w) => w.state === "failed").map((w) => `${w.id}: ${w.error ?? "failed"}`).join(" | ");
     pushTrace(order, { from: "Claude (manager)", to: "CEO", what: "fleet failed", detail: order.error });
     appendAssistantEntry(`Fleet order ${order.id} failed.\n${order.error}`);
+    // F09: announce the failed order. Guarded: a webhook can never change an order's state.
+    try { void notify("failed", order).catch(() => undefined); } catch { /* ignore */ }
     return;
   }
   order.status = "running";

@@ -1,0 +1,50 @@
+# Docker Compose for the local, mock-mode router (order F11-docker; see docs/DOCKER.md).
+# Mock mode only: MOCK_MODE=1 makes src/mock.ts answer instead of a provider, so this
+# stack needs no provider keys, no GPU and no jcode.
+#
+#   docker compose up --build          # then http://127.0.0.1:8787/health
+#   docker compose ps                  # healthcheck: healthy
+#
+# name: the project directory ("Default Project") is not a valid Compose project name.
+name: internal-llm-router
+
+services:
+  router:
+    build: .
+    image: internal-llm-router:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"   # localhost only; do not publish this port to a network
+    environment:
+      MOCK_MODE: "1"
+      PORT: "8787"
+      # A published port cannot reach a loopback-only bind, so the container listens on
+      # all interfaces. src/config.ts (assertConfig) refuses HOST=0.0.0.0 without a
+      # COMPANY_AUTH_TOKEN, hence the token below, which you must supply (no default is shipped, because a public default would be a known credential).
+      HOST: "0.0.0.0"
+      COMPANY_AUTH_TOKEN: "${COMPANY_AUTH_TOKEN:?Set COMPANY_AUTH_TOKEN first: run npx tsx ops/setup.ts, which writes one to .env}"
+    # No env_file on purpose: injecting ./.env would copy every secret in it into this mock-mode
+    # container. Compose still reads ./.env to SUBSTITUTE the variables named in this file only.
+    volumes:
+      # Org state, memory, fleet watcher locks, uploads (src/company/*).
+      - company:/app/company
+      # logs/router.crash.log, logs/workers.json, logs/token-ledger.jsonl.
+      - logs:/app/logs
+    healthcheck:
+      # /health is registered first in src/server.ts and needs no token. curl is not in
+      # the slim image, so probe with node's global fetch (Node 24).
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  company:
+  logs:

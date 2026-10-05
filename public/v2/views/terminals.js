@@ -13,7 +13,9 @@
 //   POST /company/terminals/:sessionId/message {text} -> { ok, how:"targeted", detail }
 //   GET  /company/workers                           -> { live:[{name,pid,status:"running"|"finished"|
 //        "killed"|"stopped",provider,model,startedAt,elapsedSec,maxMinutes,maxUsd,turns,estUsd,
-//        endedBy}], recent:[...] } — the headless guarded workers (ops/spawn-worker.ps1)
+//        endedBy,title,order,lastActivity,idleSec}], recent:[...], queued:[{name,state:"queued"|
+//        "refused"|"skipped",position,order,title,note,updatedAt}] } — every headless guarded
+//        worker (ops/spawn-worker.ps1) plus the current wave's not-yet-run orders
 //   GET  /company/workers/:name/tail?lines=N         -> { name, lines:[string] }
 // The message goes in with `jcode transcript --mode send -S <sessionId>` (targeted; it can
 // only land in that one terminal). A closed terminal refuses it.
@@ -189,11 +191,36 @@ const MOCK_WORKERS = {
       elapsedSec: 62,
       maxMinutes: 30,
       maxUsd: 0.5,
+      title: "Order F14-terminals-everything: one list of every worker, what it is doing, and what is queued",
+      order: "docs\\overnight\\ORDER_F14-terminals-everything.md",
+      lastActivity: "[bash] Get-Content logs\\workers.json -Tail 3",
+      idleSec: 4,
+    },
+    {
+      name: "budget-all",
+      pid: 1234,
+      status: "running",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+      startedAt: new Date(Date.now() - 800_000).toISOString(),
+      elapsedSec: 800,
+      maxMinutes: 20,
+      maxUsd: 0.4,
+      title: "Order F04-cost-report: a daily cost report the CEO can read",
+      order: "docs\\overnight\\ORDER_F04-cost-report.md",
+      lastActivity: "Let me look at the ledger again.",
+      idleSec: 147, // proves the "quiet for N s" warning
     },
   ],
   recent: [
-    { name: "budget-all", pid: 30440, status: "finished", provider: "deepseek", model: "deepseek-flash", startedAt: "", elapsedSec: 0, maxMinutes: 20, maxUsd: 0.4, turns: 19, estUsd: 0.0706, endedBy: "finished" },
-    { name: "gh-5", pid: 0, status: "killed", provider: "opencode-go", model: "deepseek-v4-flash", startedAt: "", elapsedSec: 0, maxMinutes: 15, maxUsd: 0.3, turns: 22, estUsd: 0.0662, endedBy: "killed:repeat-line x6" },
+    { name: "f11-docker", pid: 23036, status: "finished", provider: "opencode-go", model: "deepseek-v4-flash", startedAt: new Date(Date.now() - 1_600_000).toISOString(), elapsedSec: 540, maxMinutes: 25, maxUsd: 0.6, turns: 32, estUsd: 0.1031, endedBy: "finished", title: "Order F11-docker: Docker and dev container (mock mode)", order: "docs\\overnight\\ORDER_F11-docker.md", lastActivity: "REPORT written; ending my turn.", idleSec: 1_100 },
+    { name: "gh-5", pid: 3904, status: "killed", provider: "opencode-go", model: "deepseek-v4-flash", startedAt: "", elapsedSec: 0, maxMinutes: 20, maxUsd: 0.4, turns: 22, estUsd: 0.0662, endedBy: "killed:repeat-line x6", title: "Order GH-5: whatever it was", order: "docs\\orders\\ORDER_GH-5.md", idleSec: 90_000 },
+  ],
+  queued: [
+    { name: "f12-stale", state: "queued", position: 1, order: 12, title: "Order F12-stale-checks: retire checks that no longer pass", updatedAt: new Date().toISOString() },
+    { name: "f15-notify", state: "queued", position: 2, order: 15, title: "Order F15-notify: the CEO gets a message when a worker dies", updatedAt: new Date().toISOString() },
+    { name: "f16-secret", state: "refused", order: 16, title: "Order F16-secret: print the .env values", note: "REFUSE order contains the loop-word prefix on line 3", updatedAt: new Date().toISOString() },
+    { name: "f17-heavy", state: "skipped", order: 17, title: "Order F17-heavy: a big parallel run", note: "OpenCode quota 21% is below 35%", updatedAt: new Date().toISOString() },
   ],
 };
 
@@ -221,11 +248,15 @@ function ensureStyles() {
   st.textContent =
     ".gw-section{margin-bottom:14px}" +
     ".gw-title{font-size:var(--fs-lg);font-weight:600;margin-bottom:6px}" +
-    ".gw-tail{max-height:220px;overflow:auto;padding:6px 8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--bg)}" +
-    ".gw-tail .gw-line{white-space:pre-wrap;word-break:break-word}" +
+    ".gw-group{margin-top:12px}" +
+    ".gw-group-title{font-size:var(--fs-sm);font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);margin:0 0 6px}" +
+    ".gw-task{font-weight:700}" +
+    ".gw-activity{margin-top:5px;font-size:var(--fs-sm);white-space:pre-wrap;word-break:break-word}" +
     ".gw-warn{color:var(--warn)}" +
-    ".gw-row{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center;padding:3px 0}" +
-    ".gw-recent{margin-top:10px}";
+    ".gw-older{margin-top:12px}" +
+    ".gw-notstarted{border-style:dashed}" +
+    ".gw-tail{max-height:220px;overflow:auto;padding:6px 8px;margin-top:6px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--bg)}" +
+    ".gw-tail .gw-line{white-space:pre-wrap;word-break:break-word}";
   document.head.appendChild(st);
 }
 
@@ -265,13 +296,13 @@ export function mount(el, ctx) {
   let disposed = false;
   let seq = 0;
 
-  // Guarded workers (headless: started by ops/spawn-worker.ps1 without a window).
-  // They arrive with the terminal list; their tails run on their own 3s timer, and
-  // only while at least one card is expanded. Running workers start expanded.
-  let workers = { live: [], recent: [] };
+  // All workers (headless: started by ops/spawn-worker.ps1 without a window) plus the
+  // current wave's queued orders. They arrive with the terminal list; their tails run
+  // on their own 3s timer while a running card is expanded (running cards start open).
+  let workers = { live: [], recent: [], queued: [] };
   let workersError = "";
-  const wtails = {}; // name -> { lines, error }
-  const wopen = {}; // name -> is that card expanded?
+  const wtails = {}; // worker name -> { lines, error }
+  const wopen = {}; // row key -> is that card's tail expanded?
 
   function currentOpenId() {
     const h = typeof location !== "undefined" ? String(location.hash || "") : "";
@@ -322,7 +353,7 @@ export function mount(el, ctx) {
     );
   }
 
-  /* ------------------------------------------- guarded workers (headless) */
+  /* ---------------------- all workers: headless running + queued + finished */
 
   function workerTailHtml(name) {
     const t = wtails[name];
@@ -333,55 +364,138 @@ export function mount(el, ctx) {
     return lines.map((l) => '<div class="gw-line">' + esc(l) + "</div>").join("");
   }
 
-  function guardCardHtml(w) {
-    const open = !!wopen[w.name];
-    const meta = [];
-    if (w.provider) meta.push('<span class="tiny">' + esc(w.provider) + "</span>");
-    if (w.model) meta.push('<span class="tiny">' + esc(w.model) + "</span>");
-    if (typeof w.estUsd === "number") meta.push('<span class="tiny">~' + esc(usd4(w.estUsd)) + " spent</span>");
-    meta.push('<span class="tiny">pid ' + esc(String(w.pid)) + "</span>");
+  const QUIET_SEC = 60; // a running worker silent this long is flagged on its card
+  const DAY_SEC = 24 * 60 * 60; // the "finished in the last 24 hours" window
+
+  function idleOf(w) {
+    const n = Number(w && w.idleSec);
+    return Number.isFinite(n) ? Math.max(0, n) : Number.POSITIVE_INFINITY;
+  }
+
+  /** One row per worker (running/finished/killed) plus one per not-yet-run queue
+   * entry, newest activity first, grouped by status. Nothing is hidden behind a
+   * collapsed section except finished entries older than a day ("show older"). */
+  function allWorkerRows() {
+    const live = Array.isArray(workers.live) ? workers.live : [];
+    const recent = Array.isArray(workers.recent) ? workers.recent : [];
+    const queued = Array.isArray(workers.queued) ? workers.queued : [];
+    const byIdle = (a, b) => idleOf(a) - idleOf(b); // newest activity first
+    const rows = [];
+    live.slice().sort(byIdle).forEach((w) => rows.push({ group: "running", key: "run:" + w.name + ":" + (w.pid || 0), w }));
+    queued.slice().sort((a, b) => (Number(a.position) || 999) - (Number(b.position) || 999))
+      .forEach((q) => rows.push({ group: "queued", key: "queue:" + q.name + ":" + (q.order ?? ""), q }));
+    recent.slice().sort(byIdle).forEach((w, i) => {
+      const group = w.status === "killed" ? "killed" : (idleOf(w) <= DAY_SEC ? "finished" : "older");
+      rows.push({ group, key: group + ":" + w.name + ":" + (w.pid || 0) + ":" + i, w });
+    });
+    return rows;
+  }
+
+  /** Running cards start expanded; every other card starts collapsed. */
+  function isOpen(row) {
+    const v = wopen[row.key];
+    return v === undefined ? row.group === "running" : !!v;
+  }
+
+  function quietHtml(w) {
+    if (!w || w.status !== "running" || idleOf(w) < QUIET_SEC) return "";
+    return '<span class="gw-warn">quiet for ' + esc(String(Math.round(idleOf(w)))) + " s</span>";
+  }
+
+  function workerTimeHtml(w) {
+    if (!w) return "";
+    if (w.status === "running") return '<span class="tiny">' + esc(mmss(w.elapsedSec)) + " elapsed</span>";
+    return Number(w.elapsedSec) > 0 ? '<span class="tiny">' + esc(mmss(w.elapsedSec)) + " total</span>" : "";
+  }
+
+  function workerCardHtml(row) {
+    const w = row.w || {};
+    const open = isOpen(row);
+    const bits = [];
+    if (w.provider) bits.push('<span class="tiny">' + esc(w.provider) + "</span>");
+    if (w.model) bits.push('<span class="tiny">' + esc(w.model) + "</span>");
+    const time = workerTimeHtml(w);
+    if (time) bits.push(time);
+    if (typeof w.turns === "number") bits.push('<span class="tiny">' + esc(String(w.turns)) + " turns</span>");
+    if (typeof w.estUsd === "number") bits.push('<span class="tiny">~' + esc(usd4(w.estUsd)) + "</span>");
+    if (w.status !== "running") {
+      const end = endedByWords(w);
+      bits.push('<span class="tiny' + (end.warn ? " gw-warn" : " muted") + '">' + esc(end.text) + "</span>");
+    }
+    const quiet = quietHtml(w);
+    const activity = w.lastActivity || quiet
+      ? '<div class="gw-activity">' + esc(w.lastActivity || "") +
+        (quiet ? (w.lastActivity ? " · " : "") + quiet : "") + "</div>"
+      : "";
     return (
-      '<div class="term-card' + (open ? " is-open" : "") + '">' +
-      '<div class="term-head" data-act="wtoggle" data-wname="' + esc(w.name) + '" tabindex="0" role="button">' +
-      '<span class="dot dot-ok term-pulse"></span>' +
-      '<span class="term-name">' + esc(w.name) + "</span>" +
+      '<div class="term-card gw-card' + (open ? " is-open" : "") + '">' +
+      '<div class="term-head" data-act="wtoggle" data-wkey="' + esc(row.key) + '" data-wopen="' + (open ? "1" : "0") + '" tabindex="0" role="button">' +
+      '<span class="' + (w.status === "running" ? "dot dot-ok term-pulse" : w.status === "killed" ? "dot dot-warn" : "dot dot-dim") + '"></span>' +
+      '<span class="term-name gw-task">' + esc(w.title || "untitled task") + "</span>" +
       workerPill(w) +
       '<span class="grow"></span>' +
-      '<span class="tiny">' + esc(mmss(w.elapsedSec)) + "</span>" +
+      '<span class="tiny muted">' + esc(open ? "hide tail" : "show tail") + "</span>" +
       "</div>" +
-      '<div class="term-meta">' + meta.join("") + "</div>" +
-      (open ? '<div class="gw-tail term-tail" data-wtail="' + esc(w.name) + '">' + workerTailHtml(w.name) + "</div>" : "") +
+      '<div class="term-meta"><span class="tiny">' + esc(w.name) + "</span>" + bits.join("") + "</div>" +
+      activity +
+      (open ? '<div class="gw-tail term-tail" data-wtail="' + esc(row.key) + '">' + workerTailHtml(w.name) + "</div>" : "") +
       "</div>"
     );
   }
 
-  function recentRowHtml(w) {
-    const end = endedByWords(w);
-    const bits = [];
-    bits.push('<span class="tiny">' + esc(w.status) + "</span>");
-    if (typeof w.turns === "number") bits.push('<span class="tiny">' + esc(String(w.turns)) + " turns</span>");
-    if (typeof w.estUsd === "number") bits.push('<span class="tiny">~' + esc(usd4(w.estUsd)) + "</span>");
-    bits.push('<span class="tiny' + (end.warn ? " gw-warn" : " muted") + '">' + esc(end.text) + "</span>");
-    return '<div class="gw-row"><span class="term-name">' + esc(w.name) + "</span>" + bits.join("") + "</div>";
+  function queueCardHtml(row) {
+    const q = row.q || {};
+    const waiting = q.state === "queued";
+    const pill = '<span class="pill ' + (waiting ? "pill-dim" : "pill-warn") + '">' + esc(q.state || "queued") + "</span>";
+    const note = waiting
+      ? '<div class="gw-activity">waiting for a free slot' + (q.position ? " · position " + esc(String(q.position)) : "") + "</div>"
+      : '<div class="gw-activity gw-warn">' + esc(q.note || (q.state === "refused" ? "refused by the wrapper" : "skipped: no free slot this wave")) + "</div>";
+    return (
+      '<div class="term-card gw-card gw-notstarted">' +
+      '<div class="term-head">' + pill +
+      '<span class="term-name gw-task">' + esc(q.title || "untitled order") + "</span>" +
+      '<span class="grow"></span>' +
+      (q.order ? '<span class="tiny muted">#' + esc(String(q.order)) + "</span>" : "") +
+      "</div>" +
+      '<div class="term-meta"><span class="tiny">' + esc(q.name) + "</span>" +
+      '<span class="tiny">' + esc(waiting ? "not started yet" : "never started") + "</span></div>" +
+      note +
+      "</div>"
+    );
+  }
+
+  function workerGroupHtml(label, rows) {
+    if (!rows.length) return "";
+    return '<div class="gw-group"><div class="gw-group-title">' + esc(label) +
+      ' <span class="tiny">(' + esc(String(rows.length)) + ")</span></div>" +
+      '<div class="term-grid">' + rows.map((r) => (r.q ? queueCardHtml(r) : workerCardHtml(r))).join("") + "</div></div>";
+  }
+
+  function workerCounts() {
+    const rows = allWorkerRows();
+    const n = (g) => rows.filter((r) => r.group === g).length;
+    return { running: n("running"), queued: n("queued"), finished: n("finished") };
   }
 
   function guardSectionHtml() {
-    const live = Array.isArray(workers.live) ? workers.live : [];
-    const recent = Array.isArray(workers.recent) ? workers.recent : [];
+    const rows = allWorkerRows();
+    const older = rows.filter((r) => r.group === "older");
     return (
       '<div class="gw-section">' +
-      '<div class="gw-title">Guarded workers (headless, no window)</div>' +
+      '<div class="gw-title">All workers</div>' +
       (workersError ? errorCard(workersError) : "") +
-      '<div class="small muted">These are started by ops/spawn-worker.ps1 and run without a ' +
-      "window, so they never appear in the jcode list. A live tail refreshes every 3 seconds " +
-      "while a card is open.</div>" +
-      (live.length
-        ? '<div class="term-grid">' + live.map(guardCardHtml).join("") + "</div>"
-        : emptyCard("No guarded workers running right now.")) +
-      (recent.length
-        ? '<details class="gw-recent"><summary class="small muted">Recently finished (' + esc(String(recent.length)) + ")</summary>" +
-          recent.map(recentRowHtml).join("") + "</details>"
+      '<div class="small muted">Every headless worker (started by ops/spawn-worker.ps1, no window) and ' +
+      "every order of the current wave that is still waiting. Running cards start expanded and their " +
+      "tail refreshes every 3 seconds; any other card opens with “show tail”.</div>" +
+      workerGroupHtml("Running", rows.filter((r) => r.group === "running")) +
+      workerGroupHtml("Queued", rows.filter((r) => r.group === "queued")) +
+      workerGroupHtml("Finished (last 24 h)", rows.filter((r) => r.group === "finished")) +
+      workerGroupHtml("Killed", rows.filter((r) => r.group === "killed")) +
+      (older.length
+        ? '<details class="gw-older"><summary class="small muted">show older (' + esc(String(older.length)) + ")</summary>" +
+          workerGroupHtml("Finished earlier", older) + "</details>"
         : "") +
+      (rows.length ? "" : emptyCard("No workers yet — nothing running and nothing queued.")) +
       "</div>"
     );
   }
@@ -392,6 +506,7 @@ export function mount(el, ctx) {
     }
     const rows = visible();
     const counts = terminals.reduce((acc, t) => { acc[t.state] = (acc[t.state] || 0) + 1; return acc; }, {});
+    const wc = workerCounts();
     const filterBtn = (key, label) =>
       '<button class="btn btn-sm' + (filter === key ? " btn-primary" : "") + '" data-act="filter" data-f="' + key + '"' +
       ">" + esc(label) + "</button>";
@@ -407,7 +522,9 @@ export function mount(el, ctx) {
       esc(String(counts.working || 0)) + " of them working right now · " +
       esc(String(counts.idle || 0)) + " idle · " +
       esc(String(counts.closed || 0)) + " closed · " +
-      esc(String((workers.live || []).length)) + " guarded workers running" +
+      esc(String(wc.running)) + " workers running · " +
+      esc(String(wc.queued)) + " queued · " +
+      esc(String(wc.finished)) + " finished today" +
       (mock ? ' · <b>sample data</b> (?mock=1)' : "") +
       "</div>" +
       "</div>" +
@@ -584,10 +701,10 @@ export function mount(el, ctx) {
       workers = {
         live: Array.isArray(d.live) ? d.live : [],
         recent: Array.isArray(d.recent) ? d.recent : [],
+        queued: Array.isArray(d.queued) ? d.queued : [],
       };
       workersError = "";
-      // A running worker starts expanded (the CEO wants to watch it, not click first).
-      for (const w of workers.live) if (wopen[w.name] === undefined) wopen[w.name] = true;
+      // Running cards start expanded via isOpen(); nothing to seed here.
     } else {
       workersError = msgOf(workRes.e);
     }
@@ -595,10 +712,13 @@ export function mount(el, ctx) {
     render();
   }
 
-  /** Fetch the tail of every expanded live worker, then repaint just those boxes. */
+  /** Fetch the tail of every expanded card, then repaint just those boxes. */
   async function loadWorkerTails() {
     if (disposed) return;
-    const names = (workers.live || []).filter((w) => wopen[w.name]).map((w) => w.name);
+    const names = [];
+    for (const r of allWorkerRows()) {
+      if (r.w && isOpen(r) && names.indexOf(r.w.name) < 0) names.push(r.w.name);
+    }
     if (!names.length) return;
     await Promise.all(names.map(async (n) => {
       try {
@@ -614,14 +734,14 @@ export function mount(el, ctx) {
     if (!disposed) paintWorkerTails();
   }
 
-  /** The 3s timer runs only while the page is open AND a live card is expanded. */
+  /** The 3s timer runs only while the page is open AND a running card is expanded. */
   function armWorkerTails() {
     if (stopWTail) {
       try { stopWTail(); } catch { /* ignore */ }
       stopWTail = null;
     }
     if (disposed) return;
-    const any = (workers.live || []).some((w) => wopen[w.name]);
+    const any = allWorkerRows().some((r) => r.w && r.group === "running" && isOpen(r));
     if (!any) return;
     try { stopWTail = poll(loadWorkerTails, WTAIL_MS); } catch { stopWTail = null; }
     if (stopWTail) loadWorkerTails();
@@ -629,12 +749,12 @@ export function mount(el, ctx) {
 
   /** Swap only the tail boxes, so the rest of the page (and any focus) stays put. */
   function paintWorkerTails() {
-    for (const w of workers.live || []) {
-      if (!wopen[w.name]) continue;
-      const box = el.querySelector('[data-wtail="' + w.name + '"]');
+    for (const r of allWorkerRows()) {
+      if (!r.w || !isOpen(r)) continue;
+      const box = el.querySelector('[data-wtail="' + r.key + '"]');
       if (!box) continue;
       const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
-      box.innerHTML = workerTailHtml(w.name);
+      box.innerHTML = workerTailHtml(r.w.name);
       if (atBottom) box.scrollTop = box.scrollHeight;
     }
   }
@@ -738,8 +858,8 @@ export function mount(el, ctx) {
       return;
     }
     if (act === "wtoggle") {
-      const n = node.getAttribute("data-wname");
-      if (n) { wopen[n] = !wopen[n]; render(); }
+      const key = node.getAttribute("data-wkey");
+      if (key) { wopen[key] = node.getAttribute("data-wopen") !== "1"; render(); }
       return;
     }
     if (act === "retry") { loadList(); if (currentOpenId()) loadTail(); return; }
@@ -769,8 +889,8 @@ export function mount(el, ctx) {
     const t = e.target;
     if (e.key === "Enter" && t && t.getAttribute && t.getAttribute("data-act") === "wtoggle") {
       e.preventDefault();
-      const n = t.getAttribute("data-wname");
-      if (n) { wopen[n] = !wopen[n]; render(); }
+      const key = t.getAttribute("data-wkey");
+      if (key) { wopen[key] = t.getAttribute("data-wopen") !== "1"; render(); }
       return;
     }
     if (e.key === "Enter" && t && t.getAttribute && t.getAttribute("data-act") === "draft") {
@@ -809,6 +929,7 @@ export function mount(el, ctx) {
   if (mock) {
     loaded = true;
     terminals = MOCK_LIST.terminals;
+    workers = MOCK_WORKERS;
     tail = currentOpenId() ? MOCK_TAIL : tail;
     render();
   } else if (api) {

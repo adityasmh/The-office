@@ -34,6 +34,9 @@ import {
 // Type-only: erased at compile time, so this does not create a runtime import cycle
 // with fleet.ts (which imports the values below).
 import type { FleetOrder, WorkOrder } from "./fleet.js";
+// F10: the fleet policy. Protected paths (secrets, CI, .git, policy.json, keys) are dropped
+// from the owned-file derivation and the publish step refuses to commit one.
+import { isProtected, loadPolicy, checkPublish, type Policy } from "./policy.js";
 
 export type CiVerdict = "RED" | "GREEN" | "PENDING";
 
@@ -80,7 +83,7 @@ export const DERIVED_OWNS_CAP = 20;
 const UNSAFE_OWNED_EXTENSIONS = [".pem", ".key", ".log", ".pid"];
 
 /** True when a path must never be committed: outside the repo, secret-shaped or generated. */
-function unsafeOwnedPath(p: string): boolean {
+function unsafeOwnedPath(p: string, policy: Policy = loadPolicy()): boolean {
   const s = String(p ?? "").replace(/\\/g, "/").trim();
   if (!s) return true;
   if (s.includes("..")) return true; // outside the repo (traversal)
@@ -92,15 +95,16 @@ function unsafeOwnedPath(p: string): boolean {
   const base = s.slice(s.lastIndexOf("/") + 1);
   if (/^\.env(\.|$)/.test(base) && base !== ".env.example") return true; // .env, .env.* except .env.example
   if (UNSAFE_OWNED_EXTENSIONS.some((ext) => base.toLowerCase().endsWith(ext))) return true;
+  if (isProtected(s, policy)) return true; // F10: the policy's protected paths (CI, policy.json, ...)
   return false;
 }
 
 /** The subset of `paths` that may be committed: the unsafe ones are dropped, order kept. */
-export function ownablePaths(paths: string[]): string[] {
+export function ownablePaths(paths: string[], policy: Policy = loadPolicy()): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of Array.isArray(paths) ? paths : []) {
-    if (typeof raw !== "string" || unsafeOwnedPath(raw)) continue;
+    if (typeof raw !== "string" || unsafeOwnedPath(raw, policy)) continue;
     const norm = raw.replace(/\\/g, "/").trim();
     if (seen.has(norm)) continue;
     seen.add(norm);
@@ -140,7 +144,7 @@ export function deriveOwns(
     const base = p.slice(p.lastIndexOf("/") + 1);
     return mentionedIn(report, p) || mentionedIn(report, base);
   });
-  const safe = ownablePaths(named);
+  const safe = ownablePaths(named, loadPolicy(repoDir));
   if (safe.length === 0) {
     return { owns: [], why: `none of the ${changed.length} changed file(s) is named in the report, or all are unsafe to commit` };
   }
@@ -211,6 +215,15 @@ export async function publishWorkOrder(
   if (!ownsProvided && derived.owns.length === 0) return { skipped: derived.why };
   const owns = ownsProvided ? workOrder.owns : derived.owns;
   if (!ownsProvided) log("publishWorkOrder", `derived owns for ${workOrder.id}: [${owns.join(", ")}] (${derived.why})`);
+
+  // F10: the policy is the last word before any git/network work. A protected path (or a list
+  // longer than maxFilesPerWorkOrder) refuses the publish with a plain reason that names the
+  // path and the rule, so a work order that edits CI files stops at the human.
+  const guard = checkPublish(owns, loadPolicy(repoDir));
+  if (!guard.ok) {
+    log("publishWorkOrder", `REFUSED: ${guard.reason}`);
+    return { skipped: guard.reason };
+  }
 
   let startBranch = "";
   let branchMade = false;
