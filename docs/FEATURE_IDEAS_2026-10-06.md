@@ -20,3 +20,4 @@ Every item below comes from a real gap seen today, not a guess. Each would be a 
 
 ## Not recommended
 - Auto-merge of fleet PRs. The merge gate should stay human.
+Done 2026-10-06: items 1 to 4 are built and verified.
