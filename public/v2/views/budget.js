@@ -63,6 +63,135 @@ function money(v) {
   return typeof v === "number" && isFinite(v) ? "$" + v.toFixed(4) : "not measured";
 }
 
+/* ALL BUDGETS (CEO order BUDGET-ALL): every window of every provider in one
+ * flat list, not only the binding one. Pure: no DOM, no window, no network -
+ * ops/budget-rows-check.mjs imports this and feeds it a fixture in the shape
+ * GET /company/budget/real returns. A provider that is not connected yields one
+ * honest "not measured" row with its own reason; no number is ever invented. */
+export function budgetRows(real) {
+  const rows = [];
+  const provs = (real && real.providers) || {};
+  const seen = new Set();
+  const pushBlock = (b) => {
+    if (!b || typeof b !== "object" || seen.has(b)) return;
+    seen.add(b);
+    const provider = b.label || b.id || "provider";
+    if (b.connected === false) {
+      rows.push({
+        provider,
+        label: "not measured",
+        remainingPct: null,
+        usedPct: null,
+        resetsIn: null,
+        binding: false,
+        note: oneLine(b.notMeasured || b.detail) || "not connected, and the provider reported no reason",
+      });
+      return;
+    }
+    const windows = Array.isArray(b.windows) ? b.windows : [];
+    if (windows.length) {
+      for (const w of windows) {
+        rows.push({
+          provider,
+          label: w.window || "window",
+          remainingPct: typeof w.remainingPct === "number" && isFinite(w.remainingPct) ? w.remainingPct : null,
+          usedPct: typeof w.usedPct === "number" && isFinite(w.usedPct) ? w.usedPct : null,
+          resetsIn: w.resetsIn || null,
+          binding: !!b.bindingWindow && w.window === b.bindingWindow,
+          note:
+            [oneLine(w.note), b.noDollarBudget ? "subscription, no dollar budget" : ""].filter(Boolean).join(" - ") ||
+            null,
+        });
+      }
+      return;
+    }
+    if (typeof b.balanceUsd === "number" && isFinite(b.balanceUsd)) {
+      const amount = "$" + b.balanceUsd.toFixed(2) + (b.currency && b.currency !== "USD" ? " " + b.currency : "");
+      const phase = oneLine(b.phaseLine);
+      rows.push({
+        provider,
+        label: "credit balance",
+        remainingPct: null,
+        usedPct: null,
+        resetsIn: null,
+        binding: false,
+        note:
+          `${amount} of prepaid credit, used only when OpenCode Go runs low.` +
+          (phase ? ` ${phase}.` : "") +
+          ` Direct routing ${b.armed ? "armed" : "off"}.`,
+      });
+      return;
+    }
+    rows.push({
+      provider,
+      label: "nothing reported",
+      remainingPct: null,
+      usedPct: null,
+      resetsIn: null,
+      binding: false,
+      note: oneLine(b.detail) || "connected, but no quota window and no balance was reported",
+    });
+  };
+  const order = ["go", "claude", "deepseek", "deepseek-direct"];
+  for (const k of order) if (provs[k]) pushBlock(provs[k]);
+  for (const k of Object.keys(provs)) if (!order.includes(k)) pushBlock(provs[k]);
+  return rows;
+}
+
+/* The "All budgets" card: one provider heading, then one line per window with a
+ * bar of the percent LEFT, the number, the reset time, and a "limiting" tag on
+ * the provider's binding window. Thresholds come from the live snapshot when it
+ * has them (same cut-offs the rest of the page reads); otherwise 15% red / 40%
+ * amber. Pure data in, string out. */
+function allBudgetsCard(real, thresholds) {
+  const rows = budgetRows(real);
+  if (!rows.length) return "";
+  const amberMin = typeof thresholds?.amberMin === "number" ? thresholds.amberMin : 15;
+  const greenMin = typeof thresholds?.greenMin === "number" ? thresholds.greenMin : 40;
+  const groups = [];
+  for (const r of rows) {
+    let g = groups.find((x) => x.provider === r.provider);
+    if (!g) {
+      g = { provider: r.provider, rows: [] };
+      groups.push(g);
+    }
+    g.rows.push(r);
+  }
+  const row = (r) => {
+    const has = typeof r.remainingPct === "number" && isFinite(r.remainingPct);
+    const level = !has ? "" : r.remainingPct <= amberMin ? "red" : r.remainingPct <= greenMin ? "amber" : "green";
+    const sev = LEVEL_CLASS[level] || "";
+    const left = has
+      ? (r.remainingPct < 10 ? r.remainingPct.toFixed(2) : r.remainingPct.toFixed(0)) + "% left"
+      : "not measured";
+    return (
+      `<div style="margin-top:var(--sp-2)">` +
+      `<div class="row" style="justify-content:space-between;gap:var(--sp-2);flex-wrap:wrap">` +
+        `<span>${esc(r.label)}</span>` +
+        `<span class="tiny muted"><b>${esc(left)}</b>` +
+          (typeof r.usedPct === "number" ? ` (${esc(pct(r.usedPct))} used)` : "") +
+          (r.resetsIn ? ` · resets in ${esc(r.resetsIn)}` : "") +
+          (r.binding ? ` <span class="pill pill-warn">limiting</span>` : "") +
+        `</span>` +
+      `</div>` +
+      (has
+        ? `<div class="bar" style="margin-top:4px"><div class="bar-fill ${sev ? "sev-" + sev : ""}" style="width:${Math.max(0, Math.min(100, r.remainingPct))}%"></div></div>`
+        : "") +
+      (r.note ? `<div class="tiny muted wrap-any" style="margin-top:2px">${esc(r.note)}</div>` : "") +
+      `</div>`
+    );
+  };
+  const sp = (real && real.spend) || {};
+  return (
+    `<div class="card card-pad"><div class="card-head"><h3>All budgets</h3></div>` +
+    groups
+      .map((g) => `<div style="margin-top:var(--sp-2)"><b>${esc(g.provider)}</b>${g.rows.map(row).join("")}</div>`)
+      .join("") +
+    `<div class="tiny muted" style="margin-top:var(--sp-2)">Spend (measured): today ${esc(money(sp.todayUsd))} · 7 days ${esc(money(sp.last7dUsd))} · all recorded ${esc(money(sp.allTimeUsd))}</div>` +
+    `</div>`
+  );
+}
+
 /* 24 h sparkline of "remaining %" for one provider: one inline SVG polyline. */
 function sparkline(samples, key, level) {
   const pts = (samples || [])
@@ -95,7 +224,10 @@ function sparkline(samples, key, level) {
   );
 }
 
-function providerCard(p, samples) {
+/* `realBlock` (optional) is the matching block of GET /company/budget/real
+ * (real.providers.go / .claude), used for the compact all-windows line at the
+ * bottom of the card. It is the same data the page already fetched. */
+function providerCard(p, samples, realBlock) {
   const level = p.level || "unknown";
   const pill = LEVEL_PILL[level] || "pill pill-dim";
   const sev = LEVEL_CLASS[level] || "";
@@ -126,6 +258,13 @@ function providerCard(p, samples) {
     `</div>` +
     `<div class="bar" style="margin-top:6px"><div class="bar-fill ${sev ? "sev-" + sev : ""}" style="width:${barWidth}%"></div></div>` +
     `<div class="tiny muted" style="margin-top:4px">${esc(reset)}</div>` +
+    (Array.isArray(realBlock && realBlock.windows) && realBlock.windows.length
+      ? `<div class="tiny muted" style="margin-top:2px">${esc(
+          realBlock.windows
+            .map((w) => `${w.window} ${typeof w.remainingPct === "number" && isFinite(w.remainingPct) ? w.remainingPct + "%" : "not measured"}`)
+            .join(" - "),
+        )}</div>`
+      : "") +
     `<div class="grid-2" style="margin-top:var(--sp-3)">` +
       `<div><div class="tiny muted">Measured burn (our own ledger, last 3 h)</div><div>${esc(money(p.burnPerHour))}/hour</div></div>` +
       `<div><div class="tiny muted">When it runs out</div><div>${runsOut}</div></div>` +
@@ -236,7 +375,7 @@ function virtualCapsCard(real) {
     let body;
     if (!p.connected) {
       body = `<div class="muted small wrap-any">not measured - ${esc(oneLine(p.notMeasured || p.detail))}</div>`;
-    } else if (p.id === "deepseek-direct") {
+    } else if (p.id === "deepseek-direct" || p.id === "deepseek") {
       body = `<div><b>${esc(amount(p.balanceUsd))}</b> <span class="muted small">${esc(p.currency || "credit")} credit - ${esc(p.phaseLine || "")}` +
         ` - ${p.armed ? "direct routing armed" : "direct routing off"}</span></div>`;
     } else {
@@ -549,12 +688,18 @@ export function mount(el, ctx) {
         : data && data.hint
           ? data.hint
           : "no snapshot yet";
-      render(missingRouteCard(detail) + virtualCapsCard(real) + usagePanel);
+      render(allBudgetsCard(real, null) + missingRouteCard(detail) + virtualCapsCard(real) + usagePanel);
       wire();
       return;
     }
 
+    const realGo = real && real.providers ? real.providers.go : null;
+    const realClaude = real && real.providers ? real.providers.claude : null;
     const parts = [];
+    // ALL BUDGETS (CEO order BUDGET-ALL): every window of every provider, first
+    // thing on the page. All the data is already here (GET /company/budget
+    // carries `real`). It renders nothing when the real feed has not answered.
+    parts.push(allBudgetsCard(real, snap.thresholds));
     parts.push(
       `<div class="row" style="justify-content:space-between">` +
         `<span class="tiny muted">checked ${esc(new Date(snap.checkedAt).toLocaleTimeString())} · every ${esc(String(snap.pollS))} s` +
@@ -562,7 +707,7 @@ export function mount(el, ctx) {
         `<button class="btn btn-sm" data-act="refresh">Refresh now</button>` +
       `</div>`,
     );
-    parts.push(`<div class="grid-2">${providerCard(snap.providers.go, snap.samples)}${providerCard(snap.providers.claude, snap.samples)}</div>`);
+    parts.push(`<div class="grid-2">${providerCard(snap.providers.go, snap.samples, realGo)}${providerCard(snap.providers.claude, snap.samples, realClaude)}</div>`);
     if (snap.override) {
       // The CEO answered a budget item in the inbox, so a one-time grant is held.
       parts.push(

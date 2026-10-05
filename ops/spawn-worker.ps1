@@ -142,16 +142,30 @@ if ($env:WORKER_DAILY_USD_CAP -ne $null -and $env:WORKER_DAILY_USD_CAP -ne "") {
 }
 $today = (Get-Date).ToString("yyyy-MM-dd")
 $spent = 0.0
+$goEst = 0.0
+# provider per worker (date|name); a worker with no record counts as credits (conservative)
+$provByKey = @{}
+$provPath = Join-Path $Root "worker-providers.jsonl"
+if (Test-Path $provPath) {
+    foreach ($pl in [System.IO.File]::ReadAllLines($provPath)) {
+        if ($pl -eq $null -or $pl.Trim() -eq "") { continue }
+        try { $po = $pl | ConvertFrom-Json; $provByKey[([string]$po.date + "|" + [string]$po.name)] = [string]$po.provider } catch { }
+    }
+}
 if (Test-Path $LedgerPath) {
     foreach ($l in [System.IO.File]::ReadAllLines($LedgerPath)) {
         if ($l -eq $null -or $l.Trim() -eq "") { continue }
         try {
             $o = $l | ConvertFrom-Json
-            if ([string]$o.date -eq $today -and $o.estUsd -ne $null) { $spent = $spent + [double]$o.estUsd }
+            if ([string]$o.date -eq $today -and $o.estUsd -ne $null) {
+                $k = [string]$o.date + "|" + [string]$o.name
+                if ($provByKey.ContainsKey($k) -and $provByKey[$k] -eq "opencode-go") { $goEst = $goEst + [double]$o.estUsd }
+                else { $spent = $spent + [double]$o.estUsd }
+            }
         } catch { }
     }
 }
-if (($spent) -ge $cap) { Refuse ("daily cap: today estUsd " + [math]::Round($spent,4) + " >= " + $cap) }
+if (($spent) -ge $cap) { Refuse ("daily cap: today CREDIT-priced estUsd " + [math]::Round($spent,4) + " >= " + $cap + " (OpenCode Go workers, est " + [math]::Round($goEst,4) + ", are not counted)") }
 
 # ---- balance floor
 $bal = $null
@@ -227,8 +241,18 @@ $rec = [ordered]@{
     maxMinutes = $MaxMinutes
     maxUsd = $MaxUsd
     creationTime = $created
+    # WORKERS-LIVE: the dashboard shows which provider/model this worker got
+    # (both were already decided and printed above; nothing new is computed here).
+    provider = $Provider
+    model = $Model
 }
 [System.IO.File]::AppendAllText($RegistryPath, (($rec | ConvertTo-Json -Compress) + "`r`n"), $utf8)
+# Provider sidecar (CEO order 2026-10-06): the daily USD cap must count prepaid CREDITS only.
+# OpenCode Go workers use quota, which the routing policy tracks; their estUsd is a DeepSeek-price
+# estimate and would otherwise block new workers while no credit is being spent.
+$ProviderLog = Join-Path $Root "worker-providers.jsonl"
+$provRec = @{ date = (Get-Date).ToString("yyyy-MM-dd"); name = $Name; provider = $Provider; model = $Model }
+[System.IO.File]::AppendAllText($ProviderLog, (($provRec | ConvertTo-Json -Compress) + "`r`n"), $utf8)
 
 # ---- start guard if not already running (never in a test root)
 if ($TestRoot -eq "") {

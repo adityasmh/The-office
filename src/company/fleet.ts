@@ -2079,20 +2079,81 @@ function normalizeWorkOrders(obj: Record<string, unknown>, order: FleetOrder, wa
  * sends ONE work order straight to a worker (the CEO's "skip the Claude plan, one worker
  * order" path). The order text IS the brief - there is no manager plan to follow - and the
  * acceptance checks are the ones the brief's own rule can state without a model: the work is
- * done and REPORT.md exists. Nothing here guesses at file ownership: `owns` stays empty and
- * `briefBody` already tells the worker to keep its edit to the smallest set and name what it
- * touched, which is what the reviewer reads.
+ * done and REPORT.md exists. The order text names the files, so `pathsNamedInOrder` derives the
+ * `owns` list from it (small orders used to carry an empty `owns` and a brief that sent the
+ * worker into docs/AGENT_COORDINATION.md to look for an ownership entry: measured
+ * docs/ORDER_2026-10-06_cheapplan-owns.md). The brief now states the owned files plainly and
+ * tells the worker to edit nothing else.
  */
-function cheapPlan(order: FleetOrder): { plan: string; workOrders: WorkOrder[] } {
+
+/** File extensions that count as a path when an order names one without a folder. */
+const ORDER_PATH_EXTS = [".ts", ".js", ".mjs", ".md", ".json", ".ps1", ".html", ".css", ".yml", ".yaml", ".txt", ".bat"];
+
+/** Folders whose contents must never be handed to a worker as `owns`. */
+const ORDER_PATH_SKIP_DIR = /^(company|logs|node_modules|\.git)\//i;
+
+/** At most this many owned paths, de-duplicated in the order they appear in the text. */
+const ORDER_PATH_MAX = 10;
+
+/**
+ * The repo-relative file paths an order text actually names. A token qualifies when it contains
+ * a slash or ends in one of ORDER_PATH_EXTS, and it survives only when it EXISTS on disk inside
+ * `repoDir` (so a wishful path invented by the order is not claimed as owned). Absolute paths,
+ * anything with `..`, the never-own folders (company/, logs/, node_modules/, .git/), secrets
+ * (.env, .env.* except .env.example, *.pem, *.key) and machine files (*.log, *.pid) are dropped.
+ * Normalised to forward slashes, capped at ORDER_PATH_MAX.
+ */
+export function pathsNamedInOrder(text: string, repoDir: string): string[] {
+  const root = path.resolve(repoDir);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of String(text ?? "").split(/[\s"'`<>()[\]{},;|]+/)) {
+    const tok = raw.replace(/^[.,:;!?*+\-]+/, "").replace(/[.,:;!?]+$/, "");
+    if (!tok || tok.length > 260) continue;
+    const lower = tok.toLowerCase();
+    if (!tok.includes("/") && !tok.includes("\\") && !ORDER_PATH_EXTS.some((e) => lower.endsWith(e))) continue;
+    // Never absolute, never a path that walks out of the repo.
+    if (path.isAbsolute(tok)) continue;
+    const norm = tok.replace(/\\/g, "/");
+    if (norm.split("/").includes("..")) continue;
+    if (ORDER_PATH_SKIP_DIR.test(norm)) continue;
+    const base = norm.slice(norm.lastIndexOf("/") + 1).toLowerCase();
+    if (base === ".env" || (base.startsWith(".env.") && base !== ".env.example")) continue;
+    if (/\.(pem|key|log|pid)$/.test(base)) continue;
+    let abs: string;
+    try { abs = path.resolve(root, norm); } catch { continue; }
+    const rel = path.relative(root, abs);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    try { if (!fs.statSync(abs).isFile()) continue; } catch { continue; }
+    const relNorm = rel.replace(/\\/g, "/");
+    const key = relNorm.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(relNorm);
+    if (out.length >= ORDER_PATH_MAX) break;
+  }
+  return out;
+}
+
+export function cheapPlan(order: FleetOrder): { plan: string; workOrders: WorkOrder[] } {
   const text = String(order.text ?? "").trim();
   const firstLine = (text.split(/\r?\n/)[0] ?? "").trim();
   const title = (firstLine || `Order ${order.id}`).slice(0, 90);
+  const owns = pathsNamedInOrder(text, repoRoot());
   const wo: WorkOrder = {
     id: "WO1",
     title,
     role: "coder",
-    owns: [],
+    owns,
     brief: [
+      ...(owns.length
+        ? [
+            `You may edit ONLY these files: ${owns.join(", ")}. Edit nothing else.`,
+            "This is a small order: make the edit, write REPORT.md, and stop.",
+          ]
+        : [
+            "The order text names what to edit; there is no file ownership list for this order. Do not search docs/AGENT_COORDINATION.md.",
+          ]),
       "The CEO's order, verbatim. This work order was built LOCALLY because the Laya gate read the order as SMALL: no planner model was called, so there is no manager plan to follow - the order text below IS the brief.",
       text,
     ].join("\n\n"),

@@ -11,6 +11,10 @@
 //        runCard?:{headline,done,remaining,doneCount,remainingCount,verdict},keepOpen,streaming}] }
 //   GET  /company/terminals/:sessionId/tail?lines=N -> { lines:[{ts,who:"ceo"|"manager"|"agent"|"tool",text}] }
 //   POST /company/terminals/:sessionId/message {text} -> { ok, how:"targeted", detail }
+//   GET  /company/workers                           -> { live:[{name,pid,status:"running"|"finished"|
+//        "killed"|"stopped",provider,model,startedAt,elapsedSec,maxMinutes,maxUsd,turns,estUsd,
+//        endedBy}], recent:[...] } — the headless guarded workers (ops/spawn-worker.ps1)
+//   GET  /company/workers/:name/tail?lines=N         -> { name, lines:[string] }
 // The message goes in with `jcode transcript --mode send -S <sessionId>` (targeted; it can
 // only land in that one terminal). A closed terminal refuses it.
 //
@@ -22,6 +26,8 @@ export const title = "Terminals";
 const LIST_MS = 5000; // terminal list refresh
 const TAIL_MS = 3000; // live tail refresh while the panel is open
 const TAIL_LINES = 80; // lines requested per tail refresh
+const WTAIL_MS = 3000; // guarded-worker tail refresh while a card is open
+const WTAIL_LINES = 40; // lines requested per guarded-worker tail refresh
 const STATE_ORDER = { working: 0, idle: 1, closed: 2 };
 
 const STYLE_ID = "terminals-view-style";
@@ -53,6 +59,36 @@ function fallbackHm(iso) {
     const d = new Date(iso);
     return isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   } catch { return ""; }
+}
+
+/** "03:12" from seconds: the elapsed clock on a guarded-worker card. */
+function mmss(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}
+
+/** "$0.0706" — the guard's estimate, kept at 4 decimals because it is small. */
+function usd4(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? "$" + v.toFixed(4) : "";
+}
+
+function workerPill(w) {
+  if (w.status === "running") return '<span class="pill pill-ok">running</span>';
+  if (w.status === "killed") return '<span class="pill pill-warn">killed</span>';
+  if (w.status === "stopped") return '<span class="pill pill-warn">stopped</span>';
+  return '<span class="pill">finished</span>';
+}
+
+/** "killed:repeat-line x6" -> plain words; the reason carries the warning colour. */
+function endedByWords(w) {
+  const e = String(w.endedBy || "finished");
+  if (e.indexOf("killed") === 0) {
+    const why = e.replace(/^killed:?\s*/, "").replace(/-/g, " ").replace(/\bx\d+$/, (m) => "(" + m.slice(1) + " times)");
+    return { text: why ? "killed: " + why : "killed", warn: true };
+  }
+  if (e === "stopped") return { text: "stopped", warn: true };
+  return { text: "finished on its own", warn: false };
 }
 
 function fallbackPoll(fn, ms) {
@@ -141,12 +177,56 @@ const MOCK_TAIL = {
   ],
 };
 
+const MOCK_WORKERS = {
+  live: [
+    {
+      name: "workers-live",
+      pid: 29472,
+      status: "running",
+      provider: "deepseek",
+      model: "deepseek-flash",
+      startedAt: new Date(Date.now() - 62_000).toISOString(),
+      elapsedSec: 62,
+      maxMinutes: 30,
+      maxUsd: 0.5,
+    },
+  ],
+  recent: [
+    { name: "budget-all", pid: 30440, status: "finished", provider: "deepseek", model: "deepseek-flash", startedAt: "", elapsedSec: 0, maxMinutes: 20, maxUsd: 0.4, turns: 19, estUsd: 0.0706, endedBy: "finished" },
+    { name: "gh-5", pid: 0, status: "killed", provider: "opencode-go", model: "deepseek-v4-flash", startedAt: "", elapsedSec: 0, maxMinutes: 15, maxUsd: 0.3, turns: 22, estUsd: 0.0662, endedBy: "killed:repeat-line x6" },
+  ],
+};
+
+const MOCK_WORKER_TAILS = {
+  "workers-live": {
+    name: "workers-live",
+    lines: [
+      "I'll start by reading the work order.",
+      "[read] docs\\ORDER_2026-10-06_workers-live.md",
+      "Let me look at the registry and the ledger the guard writes.",
+      "[bash] Get-Content logs\\workers.json -Tail 3",
+    ],
+  },
+};
+
 /* ------------------------------------------------- view CSS (namespaced) */
 
 function ensureStyles() {
   if (typeof document === "undefined" || document.getElementById(STYLE_ID)) return;
-  /* UI-CLEAN: this view's CSS moved to public/v2/style.css (one visual system
-   * for the whole dashboard), so there is nothing to inject here. */
+  /* UI-CLEAN: this view's CSS lives in public/v2/style.css (one visual system for the
+   * whole dashboard). The one block left here is the guarded-worker tail box: a
+   * scrollable, wrapping, monospace box that reads theme variables only. */
+  const st = document.createElement("style");
+  st.id = STYLE_ID;
+  st.textContent =
+    ".gw-section{margin-bottom:14px}" +
+    ".gw-title{font-size:var(--fs-lg);font-weight:600;margin-bottom:6px}" +
+    ".gw-tail{max-height:220px;overflow:auto;padding:6px 8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--bg)}" +
+    ".gw-tail .gw-line{white-space:pre-wrap;word-break:break-word}" +
+    ".gw-warn{color:var(--warn)}" +
+    ".gw-row{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center;padding:3px 0}" +
+    ".gw-recent{margin-top:10px}";
+  document.head.appendChild(st);
 }
 
 /* ---------------------------------------------------------------------- mount */
@@ -168,7 +248,8 @@ export function mount(el, ctx) {
   let terminals = [];
   let loaded = false;
   let error = "";
-  let filter = "all";
+  let filter = "all"; // WORKERS-LIVE: the page opens on "all", so idle and closed
+  // terminals are never hidden behind a filter the reader did not choose.
   let query = "";
   let openId = String(params.sessionId || params.id || "");
   let tail = null;
@@ -180,8 +261,17 @@ export function mount(el, ctx) {
   let woOpen = false; // is the "work order" disclosure open?
   let stopList = null;
   let stopTail = null;
+  let stopWTail = null; // the 3s guarded-worker tail timer
   let disposed = false;
   let seq = 0;
+
+  // Guarded workers (headless: started by ops/spawn-worker.ps1 without a window).
+  // They arrive with the terminal list; their tails run on their own 3s timer, and
+  // only while at least one card is expanded. Running workers start expanded.
+  let workers = { live: [], recent: [] };
+  let workersError = "";
+  const wtails = {}; // name -> { lines, error }
+  const wopen = {}; // name -> is that card expanded?
 
   function currentOpenId() {
     const h = typeof location !== "undefined" ? String(location.hash || "") : "";
@@ -232,6 +322,70 @@ export function mount(el, ctx) {
     );
   }
 
+  /* ------------------------------------------- guarded workers (headless) */
+
+  function workerTailHtml(name) {
+    const t = wtails[name];
+    if (!t) return '<div class="muted small">loading the tail…</div>';
+    if (t.error) return '<div class="muted small">' + esc(t.error) + "</div>";
+    const lines = Array.isArray(t.lines) ? t.lines : [];
+    if (!lines.length) return '<div class="muted small">nothing readable in this log yet.</div>';
+    return lines.map((l) => '<div class="gw-line">' + esc(l) + "</div>").join("");
+  }
+
+  function guardCardHtml(w) {
+    const open = !!wopen[w.name];
+    const meta = [];
+    if (w.provider) meta.push('<span class="tiny">' + esc(w.provider) + "</span>");
+    if (w.model) meta.push('<span class="tiny">' + esc(w.model) + "</span>");
+    if (typeof w.estUsd === "number") meta.push('<span class="tiny">~' + esc(usd4(w.estUsd)) + " spent</span>");
+    meta.push('<span class="tiny">pid ' + esc(String(w.pid)) + "</span>");
+    return (
+      '<div class="term-card' + (open ? " is-open" : "") + '">' +
+      '<div class="term-head" data-act="wtoggle" data-wname="' + esc(w.name) + '" tabindex="0" role="button">' +
+      '<span class="dot dot-ok term-pulse"></span>' +
+      '<span class="term-name">' + esc(w.name) + "</span>" +
+      workerPill(w) +
+      '<span class="grow"></span>' +
+      '<span class="tiny">' + esc(mmss(w.elapsedSec)) + "</span>" +
+      "</div>" +
+      '<div class="term-meta">' + meta.join("") + "</div>" +
+      (open ? '<div class="gw-tail term-tail" data-wtail="' + esc(w.name) + '">' + workerTailHtml(w.name) + "</div>" : "") +
+      "</div>"
+    );
+  }
+
+  function recentRowHtml(w) {
+    const end = endedByWords(w);
+    const bits = [];
+    bits.push('<span class="tiny">' + esc(w.status) + "</span>");
+    if (typeof w.turns === "number") bits.push('<span class="tiny">' + esc(String(w.turns)) + " turns</span>");
+    if (typeof w.estUsd === "number") bits.push('<span class="tiny">~' + esc(usd4(w.estUsd)) + "</span>");
+    bits.push('<span class="tiny' + (end.warn ? " gw-warn" : " muted") + '">' + esc(end.text) + "</span>");
+    return '<div class="gw-row"><span class="term-name">' + esc(w.name) + "</span>" + bits.join("") + "</div>";
+  }
+
+  function guardSectionHtml() {
+    const live = Array.isArray(workers.live) ? workers.live : [];
+    const recent = Array.isArray(workers.recent) ? workers.recent : [];
+    return (
+      '<div class="gw-section">' +
+      '<div class="gw-title">Guarded workers (headless, no window)</div>' +
+      (workersError ? errorCard(workersError) : "") +
+      '<div class="small muted">These are started by ops/spawn-worker.ps1 and run without a ' +
+      "window, so they never appear in the jcode list. A live tail refreshes every 3 seconds " +
+      "while a card is open.</div>" +
+      (live.length
+        ? '<div class="term-grid">' + live.map(guardCardHtml).join("") + "</div>"
+        : emptyCard("No guarded workers running right now.")) +
+      (recent.length
+        ? '<details class="gw-recent"><summary class="small muted">Recently finished (' + esc(String(recent.length)) + ")</summary>" +
+          recent.map(recentRowHtml).join("") + "</details>"
+        : "") +
+      "</div>"
+    );
+  }
+
   function listHtml() {
     if (!loaded) {
       return '<div class="col term"><div class="card state"><div class="spinner"></div><div>Loading terminals…</div></div></div>';
@@ -243,6 +397,7 @@ export function mount(el, ctx) {
       ">" + esc(label) + "</button>";
     return (
       '<div class="col term">' +
+      guardSectionHtml() +
       '<div class="row">' +
       '<div class="grow">' +
       '<div class="small muted">' +
@@ -251,7 +406,8 @@ export function mount(el, ctx) {
       // as the company-wide "working now" in the top bar (which counts agents).
       esc(String(counts.working || 0)) + " of them working right now · " +
       esc(String(counts.idle || 0)) + " idle · " +
-      esc(String(counts.closed || 0)) + " closed" +
+      esc(String(counts.closed || 0)) + " closed · " +
+      esc(String((workers.live || []).length)) + " guarded workers running" +
       (mock ? ' · <b>sample data</b> (?mock=1)' : "") +
       "</div>" +
       "</div>" +
@@ -398,6 +554,8 @@ export function mount(el, ctx) {
         try { next.focus(); next.setSelectionRange(caret, caret); } catch { /* not a text field */ }
       }
     }
+    // Keep the 3s guarded-worker tail timer in step with what is expanded.
+    armWorkerTails();
   }
 
   /* --------------------------------------------------------------- data */
@@ -407,18 +565,78 @@ export function mount(el, ctx) {
   async function loadList() {
     if (disposed) return;
     const mine = ++seq;
-    try {
-      const data = mock ? MOCK_LIST : await api("/company/terminals/live");
-      if (disposed || mine !== seq) return;
-      terminals = Array.isArray(data && data.terminals) ? data.terminals : [];
+    // The terminal list and the guarded-worker list are independent: one failing
+    // must not blank the other, so both are settled and handled separately.
+    const settled = (p) => p.then((d) => ({ ok: true, d }), (e) => ({ ok: false, e }));
+    const [termRes, workRes] = await Promise.all([
+      settled(mock ? Promise.resolve(MOCK_LIST) : api("/company/terminals/live")),
+      settled(mock ? Promise.resolve(MOCK_WORKERS) : api("/company/workers")),
+    ]);
+    if (disposed || mine !== seq) return;
+    if (termRes.ok) {
+      terminals = Array.isArray(termRes.d && termRes.d.terminals) ? termRes.d.terminals : [];
       error = "";
-      loaded = true;
-    } catch (e) {
-      if (disposed || mine !== seq) return;
-      error = msgOf(e);
-      loaded = true;
+    } else {
+      error = msgOf(termRes.e);
     }
+    if (workRes.ok) {
+      const d = workRes.d || {};
+      workers = {
+        live: Array.isArray(d.live) ? d.live : [],
+        recent: Array.isArray(d.recent) ? d.recent : [],
+      };
+      workersError = "";
+      // A running worker starts expanded (the CEO wants to watch it, not click first).
+      for (const w of workers.live) if (wopen[w.name] === undefined) wopen[w.name] = true;
+    } else {
+      workersError = msgOf(workRes.e);
+    }
+    loaded = true;
     render();
+  }
+
+  /** Fetch the tail of every expanded live worker, then repaint just those boxes. */
+  async function loadWorkerTails() {
+    if (disposed) return;
+    const names = (workers.live || []).filter((w) => wopen[w.name]).map((w) => w.name);
+    if (!names.length) return;
+    await Promise.all(names.map(async (n) => {
+      try {
+        const d = mock
+          ? (MOCK_WORKER_TAILS[n] || { lines: [] })
+          : await api("/company/workers/" + encodeURIComponent(n) + "/tail?lines=" + WTAIL_LINES);
+        if (disposed) return;
+        wtails[n] = { lines: Array.isArray(d && d.lines) ? d.lines : [], error: "" };
+      } catch (e) {
+        if (!disposed) wtails[n] = { lines: [], error: msgOf(e) };
+      }
+    }));
+    if (!disposed) paintWorkerTails();
+  }
+
+  /** The 3s timer runs only while the page is open AND a live card is expanded. */
+  function armWorkerTails() {
+    if (stopWTail) {
+      try { stopWTail(); } catch { /* ignore */ }
+      stopWTail = null;
+    }
+    if (disposed) return;
+    const any = (workers.live || []).some((w) => wopen[w.name]);
+    if (!any) return;
+    try { stopWTail = poll(loadWorkerTails, WTAIL_MS); } catch { stopWTail = null; }
+    if (stopWTail) loadWorkerTails();
+  }
+
+  /** Swap only the tail boxes, so the rest of the page (and any focus) stays put. */
+  function paintWorkerTails() {
+    for (const w of workers.live || []) {
+      if (!wopen[w.name]) continue;
+      const box = el.querySelector('[data-wtail="' + w.name + '"]');
+      if (!box) continue;
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+      box.innerHTML = workerTailHtml(w.name);
+      if (atBottom) box.scrollTop = box.scrollHeight;
+    }
   }
 
   async function loadTail() {
@@ -519,6 +737,11 @@ export function mount(el, ctx) {
       render();
       return;
     }
+    if (act === "wtoggle") {
+      const n = node.getAttribute("data-wname");
+      if (n) { wopen[n] = !wopen[n]; render(); }
+      return;
+    }
     if (act === "retry") { loadList(); if (currentOpenId()) loadTail(); return; }
     if (act === "send") { send(); return; }
     if (act === "wo") {
@@ -544,6 +767,12 @@ export function mount(el, ctx) {
 
   function onKeydown(e) {
     const t = e.target;
+    if (e.key === "Enter" && t && t.getAttribute && t.getAttribute("data-act") === "wtoggle") {
+      e.preventDefault();
+      const n = t.getAttribute("data-wname");
+      if (n) { wopen[n] = !wopen[n]; render(); }
+      return;
+    }
     if (e.key === "Enter" && t && t.getAttribute && t.getAttribute("data-act") === "draft") {
       e.preventDefault();
       draft = t.value;
@@ -592,6 +821,7 @@ export function mount(el, ctx) {
     disposed = true;
     if (stopList) { try { stopList(); } catch { /* ignore */ } stopList = null; }
     if (stopTail) { try { stopTail(); } catch { /* ignore */ } stopTail = null; }
+    if (stopWTail) { try { stopWTail(); } catch { /* ignore */ } stopWTail = null; }
     el.removeEventListener("click", onClick);
     el.removeEventListener("input", onInput);
     el.removeEventListener("keydown", onKeydown);

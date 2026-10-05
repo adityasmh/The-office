@@ -86,6 +86,11 @@ import { directPhase, fleetDirectReadyCached, routingPolicyStatus } from "./comp
 // routing" box (which tier each purpose got, and how many Opus calls were avoided).
 import { brainStats } from "./company/brainRouter.js";
 import { listLiveTerminals, sendTerminalMessage, terminalTail } from "./company/terminalChat.js";
+// GUARDED WORKERS (WORKERS-LIVE, 2026-10-06): workers started by ops/spawn-worker.ps1
+// run headless (no window), so they never appear in the jcode terminal list above.
+// These two read-only routes feed the Terminals page's headless section from
+// logs/workers.json + logs/token-ledger.jsonl and a worker's own stdout log.
+import { listWorkers, workerTail } from "./company/workersView.js";
 import { eventLoopLag, precompressedStatic } from "./company/cache.js";
 // ROUTER-HANG (2026-09-30): names what blocks the event loop, caps log spam, and
 // leaves evidence in logs/router*.blocks.log WHILE the loop is still blocked.
@@ -1688,6 +1693,28 @@ app.post("/company/terminals/reap", (req, res) => {
     const { dryRun } = req.body as { dryRun?: boolean };
     res.json(runReaperPass({ dryRun: dryRun ?? true }));
   } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ── GUARDED WORKERS (headless; WORKERS-LIVE, 2026-10-06) ───────────────
+// Read-only, loopback-exempt like every other GET here. /company/workers returns
+// { live, recent }; the tail route returns 400 for a bad name and 404 when there
+// is no log for that worker. Nothing here starts, stops or signals a process.
+app.get("/company/workers", (_req, res) => {
+  try { res.json(listWorkers()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get("/company/workers/:name/tail", (req, res) => {
+  try {
+    const lines = Number(req.query.lines);
+    const out = workerTail(req.params.name, Number.isFinite(lines) ? lines : 40);
+    if (out.error) return res.status(404).json({ error: out.error });
+    res.json(out);
+  } catch (e) {
+    const m = String(e);
+    if (m.includes("invalid worker name")) return res.status(400).json({ error: "invalid worker name" });
+    res.status(500).json({ error: m });
+  }
 });
 
 // ── SYSTEM: shut down everything / start everything again (docs/SHUTDOWN_SPEC.md) ────
