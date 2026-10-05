@@ -83,6 +83,16 @@ $env:JCODE_RUN_AUTO_POKE = "0"
 if ($OrderFile -ne "") {
     $orderFull = $OrderFile
     if (-not [System.IO.Path]::IsPathRooted($orderFull) -and $Repo -ne "") { $orderFull = Join-Path $Repo $OrderFile }
+    # Loop-word guard (docs/WORKER_GUARD.md rule 5): an order that contains the loop phrase's
+    # 3-letter prefix can prime a worker to repeat it. Enforced here, not left to the manager.
+    $chk = $orderFull
+    if (-not (Test-Path -LiteralPath $chk)) { $chk = Join-Path (Split-Path -Parent $PSScriptRoot) $OrderFile }
+    if ((Test-Path -LiteralPath $chk) -and (-not $Force)) {
+        $loopHits = @(Select-String -LiteralPath $chk -Pattern 'hol' -CaseSensitive:$false)
+        if ($loopHits.Count -gt 0) {
+            Refuse ("order contains the loop-word prefix on line " + $loopHits[0].LineNumber + ": rephrase it (for example use 'entire' for the word before 'order'), or pass -Force")
+        }
+    }
     $msg = "You are a jcode worker for the manager. Read and execute the work order in " + $OrderFile + " exactly as written. When the job is done print the final report and END your turn; never wait, hold, loop, re-read your own order again, or say Holding."
 } else {
     $msg = $Message

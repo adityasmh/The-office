@@ -39,15 +39,20 @@ async function main(): Promise<void> {
   const companyRoot = path.join(tmp, "company");
   const repo = path.join(tmp, "repo");
   const plain = path.join(tmp, "plain");
+  const bare = path.join(tmp, "remote.git");
+
+  // No real token may be used anywhere in this check.
+  delete process.env.GITHUB_TOKEN;
 
   // temp COMPANY_ROOT must be set BEFORE the module import (org.ts captures it at import time).
   process.env.COMPANY_ROOT = companyRoot;
   fs.mkdirSync(path.join(companyRoot, "fleet", "ord-1", "wo-1"), { recursive: true });
   fs.writeFileSync(path.join(companyRoot, "fleet", "ord-1", "wo-1", "REPORT.md"), "# report\nreal output here\n");
 
-  // a small git repo on "main" with one commit
+  // a small git repo on "main" with one commit, and a LOCAL BARE remote (no network)
   fs.mkdirSync(repo);
   fs.mkdirSync(plain);
+  git(tmp, ["init", "--bare", bare]);
   git(repo, ["init"]);
   git(repo, ["symbolic-ref", "HEAD", "refs/heads/main"]);
   git(repo, ["config", "user.email", "check@example.com"]);
@@ -55,6 +60,8 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(repo, "seed.txt"), "seed\n");
   git(repo, ["add", "--", "seed.txt"]);
   git(repo, ["commit", "-m", "seed"]);
+  git(repo, ["remote", "add", "origin", bare]);
+  git(repo, ["push", "-u", "origin", "main"]);
   const head0 = git(repo, ["rev-parse", "HEAD"]).out.trim();
   const branches0 = git(repo, ["branch", "--list"]).out;
 
@@ -175,6 +182,55 @@ async function main(): Promise<void> {
         if (prevBase === undefined) delete process.env.FLEET_GITHUB_BASE;
         else process.env.FLEET_GITHUB_BASE = prevBase;
       }
+    }
+
+    // From here on: live (no dry-run), no token, the local bare remote as origin.
+    delete process.env.FLEET_GITHUB_DRY_RUN;
+    delete process.env.GITHUB_TOKEN;
+
+    // ---- 8. live publish with no token: repo back on its starting branch -------
+    {
+      fs.writeFileSync(path.join(repo, "seed.txt"), "seed v2\n");
+      const startBranch = git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).out.trim();
+      const wo8 = { ...wo, id: "wo-8", title: "GH-5 live publish" };
+      const res = await fg.publishWorkOrder(order, wo8, repo);
+      const backOn = git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).out.trim();
+      const branchExists = git(repo, ["branch", "--list", "fleet/ord-1/wo-8"]).out.trim() !== "";
+      const pushed = git(bare, ["rev-parse", "fleet/ord-1/wo-8"]).out.trim();
+      const ok =
+        "branch" in res &&
+        res.branch === "fleet/ord-1/wo-8" &&
+        res.dryRun === false &&
+        !res.prUrl &&
+        backOn === startBranch &&
+        branchExists &&
+        pushed !== "" &&
+        fetchCount === 0;
+      record("8. live publish (no token) -> repo back on its starting branch", ok, `res=${JSON.stringify(res)} backOn=${backOn} branchExists=${branchExists} pushed=${pushed.slice(0, 8)} fetches=${fetchCount}`);
+    }
+
+    // ---- 9. commit subject is at most 72 chars for a 500-char title ------------
+    {
+      fs.writeFileSync(path.join(repo, "seed.txt"), "seed v3\n");
+      const longTitle = "T".repeat(500);
+      const wo9 = { ...wo, id: "wo-9", title: longTitle };
+      const res = await fg.publishWorkOrder(order, wo9, repo);
+      const subject = git(repo, ["log", "-1", "--format=%s", "fleet/ord-1/wo-9"]).out.trim();
+      const ok = "branch" in res && subject.length > 0 && subject.length <= 72 && longTitle.startsWith(subject.replace(/…$/, ""));
+      record("9. commit subject is at most 72 chars for a 500-char title", ok, `subjectLen=${subject.length} subject="${subject.slice(0, 48)}…"`);
+    }
+
+    // ---- 10. push failure: failed:true and repo back on its starting branch -----
+    {
+      fs.writeFileSync(path.join(repo, "seed.txt"), "seed v4\n");
+      const realOrigin = git(repo, ["remote", "get-url", "origin"]).out.trim();
+      git(repo, ["remote", "set-url", "origin", path.join(tmp, "does-not-exist.git")]);
+      const wo10 = { ...wo, id: "wo-10", title: "GH-5 failed push" };
+      const res = await fg.publishWorkOrder(order, wo10, repo);
+      const backOn = git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).out.trim();
+      git(repo, ["remote", "set-url", "origin", realOrigin]);
+      const ok = "skipped" in res && res.failed === true && res.branch === "fleet/ord-1/wo-10" && backOn === "main";
+      record("10. push failure -> failed:true, repo back on its starting branch", ok, `res=${JSON.stringify(res)} backOn=${backOn}`);
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

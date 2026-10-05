@@ -25,6 +25,9 @@ import {
   openDraftPr,
   readChecks,
   redactForLog,
+  currentBranch,
+  checkoutBranch,
+  shortSubject,
   type CheckRun,
 } from "./github.js";
 // Type-only: erased at compile time, so this does not create a runtime import cycle
@@ -35,7 +38,7 @@ export type CiVerdict = "RED" | "GREEN" | "PENDING";
 
 export type PublishResult =
   | { prUrl?: string; branch: string; base: string; dryRun: boolean }
-  | { skipped: string };
+  | { skipped: string; failed?: true; branch?: string };
 
 function log(action: string, detail: string): void {
   console.log(redactForLog(`[fleetGithub] ${action}: ${detail}`));
@@ -114,21 +117,39 @@ export async function publishWorkOrder(
     return { branch, base, dryRun: true };
   }
 
+  let startBranch = "";
+  let branchMade = false;
   try {
     const repo = repoName();
     if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) return { skipped: "FLEET_GITHUB_REPO is not set as owner/name" };
     const token = repoToken();
     ensureRepo(repoDir);
+    startBranch = currentBranch(repoDir);
     ensureBranch(repoDir, branch);
-    commitOwned(repoDir, workOrder.owns, workOrder.title);
+    branchMade = true;
+    commitOwned(repoDir, workOrder.owns, shortSubject(workOrder.title, 72));
     push(repoDir, branch);
     const body = `${readReport(order.id, workOrder.id)}\n\nVerdict: ${workOrder.verdict}`;
-    const prUrl = await openDraftPr({ repo, branch, title: workOrder.title, body, token, base });
+    const prUrl = await openDraftPr({ repo, branch, title: shortSubject(workOrder.title, 100), body, token, base });
     log("publishWorkOrder", `branch ${branch} pushed; draft PR ${prUrl ?? "(not opened: no token)"} on base ${base}`);
     return { branch, base, dryRun: false, ...(prUrl ? { prUrl } : {}) };
   } catch (e) {
     // Never throw into the fleet: a publish failure must not change a verdict or crash a tick.
-    return { skipped: redactForLog(String(e)).slice(0, 300) };
+    // Once the branch exists the folder is on it, so the caller must be told (failed) and the
+    // result carries the branch it was left on for the trace.
+    const reason = redactForLog(String(e)).slice(0, 300);
+    return branchMade ? { skipped: reason, failed: true, branch } : { skipped: reason };
+  } finally {
+    // The next order must branch from the branch we started on: return the folder to it on
+    // success AND failure. A failed switch is ignored (the publish result still stands) but is
+    // always reported in the log line.
+    if (branchMade && startBranch) {
+      try {
+        checkoutBranch(repoDir, startBranch);
+      } catch (e) {
+        log("publishWorkOrder", `could not return to ${startBranch}: ${redactForLog(String(e))}`);
+      }
+    }
   }
 }
 

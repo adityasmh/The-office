@@ -2936,7 +2936,15 @@ function ownedFileSnips(wo: WorkOrder, budget = OWNED_FILE_SNIPPET_CHARS): strin
 async function publishPass(order: FleetOrder, wo: WorkOrder): Promise<void> {
   try {
     const res = await publishWorkOrder(order, wo, repoRoot());
-    if ("skipped" in res) return; // feature off / nothing to record: no new trace step
+    if ("skipped" in res) {
+      // A failure AFTER the branch was made must be visible in the order trace; the plain
+      // skipped results (feature off, not PASS, bad repo name) stay silent as before.
+      if (res.failed) {
+        if (res.branch) wo.branch = res.branch;
+        pushTrace(order, { from: "Fleet", to: "GitHub", what: "PR publish failed", detail: res.skipped.slice(0, 200) });
+      }
+      return;
+    }
     wo.branch = res.branch;
     if (res.prUrl) wo.prUrl = res.prUrl;
     pushTrace(order, {

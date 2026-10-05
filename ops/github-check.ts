@@ -17,6 +17,9 @@ import {
   openDraftPr,
   readChecks,
   redactForLog,
+  currentBranch,
+  checkoutBranch,
+  shortSubject,
 } from "../src/company/github.js";
 
 // ---- network guard: any fetch anywhere in this process is a failure ----------
@@ -147,6 +150,32 @@ async function main(): Promise<void> {
     const redactOk = !redactForLog(`auth=${fakeToken}`).includes(fakeToken);
     record("dry-run: openDraftPr/readChecks make no network call", pr7 === null && checks7.length === 0 && fetchCount === 0, `pr=${pr7} checks=${checks7.length} fetches=${fetchCount}`);
     record("token never logged (redaction holds)", !tokenLeaked && redactOk, tokenLeaked ? "FAKE TOKEN FOUND IN LOG OUTPUT" : "no token-shaped text in log lines");
+
+    // ---- 8. shortSubject: short titles untouched, long ones cut ----------------
+    const short8 = shortSubject("tiny title", 72);
+    const long8 = "x".repeat(500);
+    const cut8 = shortSubject(long8, 72);
+    record("shortSubject leaves a short title unchanged", short8 === "tiny title", `-> "${short8}"`);
+    record(
+      "shortSubject cuts a 500-char title to at most 72",
+      cut8.length <= 72 && cut8.endsWith("…") && long8.startsWith(cut8.slice(0, -1)),
+      `len=${cut8.length} endsWithEllipsis=${cut8.endsWith("…")}`,
+    );
+
+    // ---- 9. currentBranch/checkoutBranch round-trip ---------------------------
+    git(work, ["checkout", "--", "owned.txt"]); // drop check 6's deliberate dry-run change first
+    const on9 = currentBranch(work);
+    const sha9 = revParse(work, "HEAD");
+    git(work, ["checkout", "--detach", sha9]);
+    const detached9 = currentBranch(work);
+    git(work, ["checkout", "fleet/ord-1/wo-1"]);
+    checkoutBranch(work, "main");
+    const after9 = currentBranch(work);
+    record(
+      'currentBranch reports the branch and "" when detached; checkoutBranch switches',
+      on9 === "fleet/ord-1/wo-1" && detached9 === "" && after9 === "main",
+      `on=${on9} detached="${detached9}" afterCheckoutBranch=${after9}`,
+    );
 
     // ---- restore env and clean up --------------------------------------------
     delete process.env.FLEET_GITHUB;

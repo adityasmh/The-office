@@ -62,10 +62,29 @@ function git(dir: string, args: string[]): RunResult {
   };
 }
 
-function currentBranch(dir: string): string {
+/**
+ * The branch checked out in `dir`, or "" when HEAD is detached (git prints exactly
+ * "HEAD" there). Throws only when git cannot answer at all, e.g. not a repo.
+ */
+export function currentBranch(dir: string): string {
   const res = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (!res.ok) throw new Error(`github: could not read the current branch in ${dir}: ${redactForLog(res.stderr.trim())}`);
-  return res.stdout.trim();
+  const name = res.stdout.trim();
+  return name === "HEAD" ? "" : name;
+}
+
+/** Switch `dir` to an existing branch. Throws when the switch fails. */
+export function checkoutBranch(dir: string, name: string): void {
+  if (!name) throw new Error("github: checkoutBranch needs a branch name");
+  const res = git(dir, ["checkout", name]);
+  if (!res.ok) throw new Error(`github: could not switch to ${name}: ${redactForLog(res.stderr.trim() || res.stdout.trim())}`);
+}
+
+/** The first line of `text`, trimmed, cut to at most `max` chars (an ellipsis only when cut). */
+export function shortSubject(text: string, max: number): string {
+  const first = String(text ?? "").split(/\r?\n/, 1)[0].trim();
+  if (first.length <= max) return first;
+  return `${first.slice(0, max - 1).trimEnd()}…`;
 }
 
 /** True when nothing may really run: the feature is off, or dry-run was requested. */
