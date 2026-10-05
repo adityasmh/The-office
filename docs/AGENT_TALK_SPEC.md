@@ -48,3 +48,5 @@ One real small order with two workers where worker 2 asks worker 1 one question,
 
 ## Open decision for the CEO
 Delivery in step A decides how reliable this is. If no targeted mechanism exists, the safe fallback is note-only talk (workers leave notes that peers read at their two inbox reads, no live interruption). That is much simpler and cannot disturb a running session.
+
+Status 2026-10-06: scoped only, nothing built yet.
