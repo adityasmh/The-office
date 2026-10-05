@@ -232,6 +232,135 @@ async function main(): Promise<void> {
       const ok = "skipped" in res && res.failed === true && res.branch === "fleet/ord-1/wo-10" && backOn === "main";
       record("10. push failure -> failed:true, repo back on its starting branch", ok, `res=${JSON.stringify(res)} backOn=${backOn}`);
     }
+
+    // ─────────────── F1-OWNS: deriving an empty `owns` ───────────────
+    // Still live (no dry-run), still no token, still the local bare remote.
+
+    // ---- 11. empty owns: a changed file named in the report is derived + committed ----
+    {
+      fs.writeFileSync(path.join(repo, "owned.txt"), "owned v1\n"); // untracked, named in the report
+      fs.writeFileSync(path.join(repo, "unowned.txt"), "unowned v1\n"); // untracked, NOT named
+      fs.mkdirSync(path.join(companyRoot, "fleet", "ord-1", "wo-11"), { recursive: true });
+      fs.writeFileSync(path.join(companyRoot, "fleet", "ord-1", "wo-11", "REPORT.md"), "# report\nchanged file owned.txt is done\n");
+      const wo11 = { ...wo, id: "wo-11", title: "F1 derived owns", owns: [] as string[] };
+      const res = await fg.publishWorkOrder(order, wo11, repo);
+      const committed = git(repo, ["show", "--name-only", "--format=", "fleet/ord-1/wo-11"]).out.trim().split(/\r?\n/).filter(Boolean);
+      const status = git(repo, ["status", "--porcelain"]).out;
+      const unownedDirty = /unowned\.txt/.test(status);
+      const ok =
+        "branch" in res &&
+        res.branch === "fleet/ord-1/wo-11" &&
+        JSON.stringify(res.derivedOwns) === JSON.stringify(["owned.txt"]) &&
+        committed.includes("owned.txt") &&
+        !committed.includes("unowned.txt") &&
+        unownedDirty;
+      record("11. empty owns -> changed+named derived+committed; changed+unnamed left uncommitted", ok, `res=${JSON.stringify(res)} committed=[${committed.join(", ")}] unownedDirty=${unownedDirty}`);
+    }
+
+    // ---- 12. a file named in the report that did NOT change is not derived ----
+    {
+      fs.writeFileSync(path.join(repo, "absent.txt"), "keep\n");
+      git(repo, ["add", "--", "absent.txt"]);
+      git(repo, ["commit", "-m", "track absent.txt clean"]);
+      const wo12 = { ...wo, id: "wo-12", owns: [] as string[] };
+      const d = fg.deriveOwns(wo12, repo, "# report\nwe edited absent.txt in an earlier step\n");
+      const ok = d.owns.length === 0;
+      record("12. a report-named file that did not change is not derived", ok, `owns=[${d.owns.join(", ")}] why=${d.why}`);
+    }
+
+    // ---- 13. .env / company/ / .. paths are removed even when changed and named ----
+    {
+      fs.writeFileSync(path.join(repo, ".env"), "SECRET=1\n");
+      fs.mkdirSync(path.join(repo, "company"), { recursive: true });
+      fs.writeFileSync(path.join(repo, "company", "x.json"), "{}\n");
+      const wo13 = { ...wo, id: "wo-13", owns: [] as string[] };
+      const d13 = fg.deriveOwns(wo13, repo, "# report\n.env\ncompany/x.json\n../outside.txt\n");
+      const filtered = fg.ownablePaths([".env", ".env.example", "company/x.json", "../outside.txt", "ok.txt", "a.pem", "b.key", "c.log", "d.pid", "logs/e.txt", "node_modules/f.js", ".git/config"]);
+      const filteredOk = JSON.stringify(filtered) === JSON.stringify([".env.example", "ok.txt"]);
+      const ok = d13.owns.length === 0 && filteredOk;
+      record("13. .env, company/x.json and ../outside.txt are removed even when changed and named", ok, `owns=[${d13.owns.join(", ")}] why=${d13.why} filtered=[${filtered.join(", ")}]`);
+    }
+
+    // ---- 14. more than 20 qualifying files -> empty owns with the cap reason ----
+    {
+      const capRepo = path.join(tmp, "caprepo");
+      fs.mkdirSync(capRepo);
+      git(capRepo, ["init"]);
+      git(capRepo, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+      git(capRepo, ["config", "user.email", "check@example.com"]);
+      git(capRepo, ["config", "user.name", "GH2 Check"]);
+      fs.writeFileSync(path.join(capRepo, "seed.txt"), "seed\n");
+      git(capRepo, ["add", "--", "seed.txt"]);
+      git(capRepo, ["commit", "-m", "seed"]);
+      const names: string[] = [];
+      for (let i = 1; i <= 21; i++) {
+        const name = `f${String(i).padStart(2, "0")}.txt`;
+        names.push(name);
+        fs.writeFileSync(path.join(capRepo, name), `v${i}\n`);
+      }
+      const wo14 = { ...wo, id: "wo-14", owns: [] as string[] };
+      const report14 = `# report\n${names.join("\n")}\n`;
+      const over = fg.deriveOwns(wo14, capRepo, report14);
+      fs.rmSync(path.join(capRepo, "f21.txt")); // now exactly 20 changed + named files
+      const at20 = fg.deriveOwns(wo14, capRepo, report14);
+      const ok = over.owns.length === 0 && /20/.test(over.why) && at20.owns.length === 20;
+      record("14. >20 qualifying files -> empty owns with the cap reason; exactly 20 -> 20", ok, `over=${over.owns.length} why=${over.why} at20=${at20.owns.length}`);
+    }
+
+    // ---- 15. a non-empty owns behaves exactly as before (no derivation) ----
+    {
+      fs.writeFileSync(path.join(repo, "seed.txt"), "seed v5\n");
+      fs.writeFileSync(path.join(repo, "decoy.txt"), "decoy\n"); // changed + would be derivable
+      fs.mkdirSync(path.join(companyRoot, "fleet", "ord-1", "wo-15"), { recursive: true });
+      fs.writeFileSync(path.join(companyRoot, "fleet", "ord-1", "wo-15", "REPORT.md"), "# report\nseed.txt and decoy.txt\n");
+      const wo15 = { ...wo, id: "wo-15", owns: ["seed.txt"] };
+      const res = await fg.publishWorkOrder(order, wo15, repo);
+      const committed = git(repo, ["show", "--name-only", "--format=", "fleet/ord-1/wo-15"]).out.trim().split(/\r?\n/).filter(Boolean);
+      const decoyDirty = /decoy\.txt/.test(git(repo, ["status", "--porcelain"]).out);
+      const ok =
+        "branch" in res &&
+        res.branch === "fleet/ord-1/wo-15" &&
+        res.derivedOwns === undefined &&
+        committed.includes("seed.txt") &&
+        !committed.includes("decoy.txt") &&
+        decoyDirty;
+      record("15. a non-empty owns commits exactly as before (no derivation)", ok, `res=${JSON.stringify(res)} committed=[${committed.join(", ")}] decoyDirty=${decoyDirty}`);
+    }
+
+    // ---- 16. dry-run with empty owns logs the derived list and changes nothing ----
+    {
+      fs.writeFileSync(path.join(repo, "dry.txt"), "dry\n"); // untracked, named in the report
+      fs.mkdirSync(path.join(companyRoot, "fleet", "ord-1", "wo-16"), { recursive: true });
+      fs.writeFileSync(path.join(companyRoot, "fleet", "ord-1", "wo-16", "REPORT.md"), "# report\ndry.txt was touched\n");
+      const wo16 = { ...wo, id: "wo-16", title: "F1 dry derived owns", owns: [] as string[] };
+      const headBefore = git(repo, ["rev-parse", "HEAD"]).out.trim();
+      const branchesBefore = git(repo, ["branch", "--list"]).out;
+      const lines: string[] = [];
+      const realLog = console.log;
+      let res: unknown = null;
+      try {
+        console.log = (...a: unknown[]) => {
+          lines.push(a.map((v) => String(v)).join(" "));
+        };
+        process.env.FLEET_GITHUB_DRY_RUN = "1";
+        res = await fg.publishWorkOrder(order, wo16, repo);
+      } finally {
+        console.log = realLog;
+        delete process.env.FLEET_GITHUB_DRY_RUN;
+      }
+      const headAfter = git(repo, ["rev-parse", "HEAD"]).out.trim();
+      const branchesAfter = git(repo, ["branch", "--list"]).out;
+      const logged = lines.some((l) => /DRY-RUN/.test(l) && l.includes("dry.txt"));
+      const r = res as { branch?: string; dryRun?: boolean; derivedOwns?: string[] };
+      const ok =
+        logged &&
+        r.dryRun === true &&
+        JSON.stringify(r.derivedOwns) === JSON.stringify(["dry.txt"]) &&
+        headBefore === headAfter &&
+        branchesBefore === branchesAfter &&
+        fetchCount === 0;
+      record("16. dry-run with empty owns logs the derived list and changes nothing", ok, `logged=${logged} res=${JSON.stringify(res)} headSame=${headBefore === headAfter} branchesSame=${branchesBefore === branchesAfter}`);
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

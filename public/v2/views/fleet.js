@@ -13,6 +13,7 @@
 //   GET  /company/fleet/orders/:id                          -> FleetOrder + per work order `live`
 //   POST /company/fleet/orders/:id/approve {workOrders?}    -> spawns
 //   POST /company/fleet/orders/:id/work/:wid/redo           -> fresh session with the review notes
+//   POST /company/fleet/orders/:id/work/:wid/publish        -> retry the draft PR (F34, never force-pushes)
 //   POST /company/fleet/orders/:id/cancel                   -> stop spawning queued work
 //
 // MOCK: `#/fleet?mock=1` uses built-in sample data (exact shapes above) instead
@@ -726,6 +727,7 @@ export function mount(el, ctx) {
   const edits = Object.create(null);
   const removed = Object.create(null);
   let editingWid = "";
+  let publishingWid = ""; // F34: the work order whose Retry publish request is in flight
   let planRevision = 0; // bumped whenever the edit UI itself changes (edit/save/remove)
 
   /* -------------------------------------------------------- route read */
@@ -1127,6 +1129,55 @@ export function mount(el, ctx) {
     return isFinite(end) && end > start ? end - start : 0;
   }
 
+  // F34 (docs/ORDER_2026-10-06_f34-retry-strip.md): the GitHub state of one work order - its
+  // branch, its draft PR and the CI verdict the tick last read. The trace lives on the order, so
+  // a hop is attributed to a work order by the branch name in its detail; a work order with no
+  // branch and no GitHub hop has no GitHub activity and renders nothing.
+  function githubHopsFor(o, w) {
+    const tr = o && Array.isArray(o.trace) ? o.trace : [];
+    const gh = tr.filter((h) => s(h.to).trim() === "GitHub");
+    const branch = s(w && w.branch).trim();
+    if (!branch) return [];
+    const mine = gh.filter((h) => s(h.detail).indexOf(branch) >= 0);
+    return mine.length ? mine : gh;
+  }
+
+  /** The CI verdict in plain words (fleetGithub's RED/GREEN/PENDING). */
+  function ciWords(state) {
+    const v = s(state).toUpperCase();
+    if (v === "GREEN") return "checks: passing";
+    if (v === "RED") return "checks: failing";
+    return "checks: not reported yet";
+  }
+
+  function githubStripHtml(o, w) {
+    const branch = s(w && w.branch).trim();
+    const hops = githubHopsFor(o, w);
+    if (!branch && !hops.length) return ""; // no GitHub activity for this work order
+    const prUrl = s(w && w.prUrl).trim();
+    const last = hops.length ? hops[hops.length - 1] : null;
+    const failed = !!last && s(last.what).trim() === "PR publish failed";
+    const checked = s(w && w.ciCheckedAt);
+    const busy = publishingWid === s(w.id);
+    return (
+      '<div class="muted small fleet-github">' +
+      (branch ? 'branch <code class="mono">' + esc(branch) + "</code>" : "<span>no branch yet</span>") +
+      (prUrl
+        ? ' · <a href="' + esc(prUrl) + '" target="_blank" rel="noopener">pull request</a> (draft)'
+        : " · draft pull request not opened") +
+      " · " + esc(ciWords(w && w.ciState)) +
+      (checked ? ' <span class="tiny">(checked ' + esc(ago(checked)) + ")</span>" : "") +
+      (failed
+        ? '<div class="fleet-note" style="color:var(--err)">PR publish failed: ' + esc(s(last.detail) || "no reason recorded") + "</div>" +
+          '<div class="fleet-bar">' +
+          '<button class="btn btn-sm" data-act="publish" data-wid="' + esc(w.id) + '"' + (busy ? " disabled" : "") + ">" +
+          (busy ? "Publishing…" : "Retry publish") + "</button>" +
+          '<span class="muted tiny">reuses the existing branch (never a force push) and opens the draft PR</span></div>'
+        : "") +
+      "</div>"
+    );
+  }
+
   function workerCardHtml(o, w) {
     const live = w.live || {};
     const st = woState(w.state);
@@ -1154,6 +1205,7 @@ export function mount(el, ctx) {
       (w.delivery && w.delivery.how ? " · brief delivered: " + esc(w.delivery.how) : "") +
       "</div>" +
       (s(w.error) ? '<div class="fleet-note" style="color:var(--err)">' + esc(w.error) + "</div>" : "") +
+      githubStripHtml(o, w) +
       tailHtml(w) +
       (canRedo
         ? '<div class="fleet-bar"><button class="btn btn-sm btn-err" data-act="redo" data-wid="' + esc(w.id) + '">Send back (redo)</button>' +
@@ -1559,6 +1611,54 @@ export function mount(el, ctx) {
     updateDetail();
   }
 
+  // F34: retry the draft-PR publish for a work order whose PR step failed (the ordered route).
+  async function retryPublish(wid) {
+    const oid = currentOrderId();
+    if (!oid || !wid) return;
+    const w = workOrdersOf(detail).filter((x) => x.id === wid)[0];
+    const branch = s(w && w.branch).trim();
+    const confirmed =
+      typeof window === "undefined" || typeof window.confirm !== "function"
+        ? true
+        : window.confirm(
+            "Publish " + wid + " again" + (branch ? " on " + branch : "") +
+              "?\n\nThis pushes the existing branch (never a force push) and opens the draft pull request.",
+          );
+    if (!confirmed) return;
+    actionErr = "";
+    actionMsg = "Publishing " + wid + "…";
+    publishingWid = s(wid);
+    updateDetail();
+    let out = null;
+    try {
+      out = await dataApi(
+        "/company/fleet/orders/" + encodeURIComponent(oid) + "/work/" + encodeURIComponent(wid) + "/publish",
+        { method: "POST", body: {} },
+      );
+      if (disposed) return;
+      await tickDetail();
+      const w2 = workOrdersOf(detail).filter((x) => x.id === wid)[0];
+      if (out && out.ok === false) {
+        actionErr = "Publish refused: " + s(out.reason);
+        actionMsg = "";
+      } else if (s(w2 && w2.prUrl)) {
+        actionMsg = "Published. Draft pull request: " + s(w2.prUrl);
+      } else {
+        actionMsg =
+          "Published " + wid + (s(w2 && w2.branch) ? " on " + s(w2.branch) : "") +
+          ". No pull request was opened: see the order trace.";
+      }
+      armDetail(MS_WORK);
+    } catch (e) {
+      if (disposed) return;
+      actionErr = "Publish failed: " + errText(e);
+      actionMsg = "";
+    } finally {
+      publishingWid = "";
+    }
+    updateDetail();
+  }
+
   async function cancelOrder(btn) {
     const oid = currentOrderId();
     if (!oid) return;
@@ -1702,6 +1802,10 @@ export function mount(el, ctx) {
       }
       case "redo": {
         redoWorkOrder(node.getAttribute("data-wid"));
+        return;
+      }
+      case "publish": {
+        retryPublish(node.getAttribute("data-wid"));
         return;
       }
       case "stop": {

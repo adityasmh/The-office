@@ -20,6 +20,7 @@ import {
   ghConfig,
   ensureRepo,
   branchFor,
+  changedPaths,
   commitOwned,
   push,
   openDraftPr,
@@ -37,7 +38,7 @@ import type { FleetOrder, WorkOrder } from "./fleet.js";
 export type CiVerdict = "RED" | "GREEN" | "PENDING";
 
 export type PublishResult =
-  | { prUrl?: string; branch: string; base: string; dryRun: boolean }
+  | { prUrl?: string; branch: string; base: string; dryRun: boolean; derivedOwns?: string[] }
   | { skipped: string; failed?: true; branch?: string };
 
 function log(action: string, detail: string): void {
@@ -69,6 +70,84 @@ function readReport(orderId: string, wid: string): string {
   } catch {
     return "(REPORT.md could not be read)";
   }
+}
+
+// ── derived ownership (F1-OWNS): fill in an empty `owns` from the report + the diff ──
+/** The most paths deriveOwns will ever hand back; more than this is refused, not truncated. */
+export const DERIVED_OWNS_CAP = 20;
+
+/** File extensions that are never owned, whatever the report names. */
+const UNSAFE_OWNED_EXTENSIONS = [".pem", ".key", ".log", ".pid"];
+
+/** True when a path must never be committed: outside the repo, secret-shaped or generated. */
+function unsafeOwnedPath(p: string): boolean {
+  const s = String(p ?? "").replace(/\\/g, "/").trim();
+  if (!s) return true;
+  if (s.includes("..")) return true; // outside the repo (traversal)
+  if (s.startsWith("/") || /^[A-Za-z]:\//.test(s)) return true; // absolute
+  if (s === "company" || s.startsWith("company/")) return true;
+  if (s === "logs" || s.startsWith("logs/")) return true;
+  if (s === "node_modules" || s.startsWith("node_modules/")) return true;
+  if (s === ".git" || s.startsWith(".git/")) return true;
+  const base = s.slice(s.lastIndexOf("/") + 1);
+  if (/^\.env(\.|$)/.test(base) && base !== ".env.example") return true; // .env, .env.* except .env.example
+  if (UNSAFE_OWNED_EXTENSIONS.some((ext) => base.toLowerCase().endsWith(ext))) return true;
+  return false;
+}
+
+/** The subset of `paths` that may be committed: the unsafe ones are dropped, order kept. */
+export function ownablePaths(paths: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    if (typeof raw !== "string" || unsafeOwnedPath(raw)) continue;
+    const norm = raw.replace(/\\/g, "/").trim();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(norm);
+  }
+  return out;
+}
+
+/** True when `needle` appears in `text` as a whole path or file name (not a substring). */
+function mentionedIn(text: string, needle: string): boolean {
+  if (!needle) return false;
+  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![A-Za-z0-9._/-])${esc}(?![A-Za-z0-9._/-])`).test(text);
+}
+
+/**
+ * Derive the files a work order owns when the plan left `owns` empty: the files that
+ * changed (git status vs HEAD) AND that the work order's REPORT.md names, minus
+ * anything unsafe to commit. Never throws - an empty list explains itself in `why`,
+ * including the cap reason when more than DERIVED_OWNS_CAP files qualify.
+ */
+export function deriveOwns(
+  workOrder: WorkOrder,
+  repoDir: string,
+  reportText: string,
+): { owns: string[]; why: string } {
+  let changed: string[];
+  try {
+    changed = changedPaths(repoDir);
+  } catch (e) {
+    return { owns: [], why: `could not read the changed files in ${repoDir}: ${redactForLog(String(e)).slice(0, 200)}` };
+  }
+  if (changed.length === 0) return { owns: [], why: "no changed files to derive from" };
+
+  const report = String(reportText ?? "");
+  const named = changed.filter((p) => {
+    const base = p.slice(p.lastIndexOf("/") + 1);
+    return mentionedIn(report, p) || mentionedIn(report, base);
+  });
+  const safe = ownablePaths(named);
+  if (safe.length === 0) {
+    return { owns: [], why: `none of the ${changed.length} changed file(s) is named in the report, or all are unsafe to commit` };
+  }
+  if (safe.length > DERIVED_OWNS_CAP) {
+    return { owns: [], why: `more than ${DERIVED_OWNS_CAP} files qualify as owned; refusing an unbounded commit list` };
+  }
+  return { owns: safe, why: `derived ${safe.length} owned path(s) for ${workOrder?.id ?? "the work order"}: ${safe.join(", ")}` };
 }
 
 // ── local git plumbing for branch creation (GH-1 owns the rest) ─────────────
@@ -108,14 +187,30 @@ export async function publishWorkOrder(
   const branch = branchFor(order.id, workOrder.id);
   const base = prBase();
 
+  // F1-OWNS: an empty `owns` is derived from the work order's report + the changed files,
+  // so a small (locally planned) work order needs no hand-set ownership. deriveOwns never
+  // throws: any git error becomes an empty owns plus a reason.
+  const ownsProvided = Array.isArray(workOrder.owns) && workOrder.owns.length > 0;
+  const derived: { owns: string[]; why: string } = ownsProvided
+    ? { owns: [], why: "owns was already set on the work order" }
+    : deriveOwns(workOrder, repoDir, readReport(order.id, workOrder.id));
+
   // Dry-run (or a missing repo/token) must change nothing. Start no git or network work.
+  // An empty `owns` is still derived (read-only) and logged, so the intent is visible.
   if (cfg.dryRun) {
+    const shown = ownsProvided ? workOrder.owns : derived.owns;
+    const list = shown.length > 0 ? `[${shown.join(", ")}]` : `[] (${ownsProvided ? "none" : derived.why})`;
     log(
       "publishWorkOrder",
-      `DRY-RUN (FLEET_GITHUB_DRY_RUN=1) would branch ${branch}, commit [${workOrder.owns.join(", ")}], push and open a draft PR on base ${base}`,
+      `DRY-RUN (FLEET_GITHUB_DRY_RUN=1) would branch ${branch}, commit ${list}, push and open a draft PR on base ${base}`,
     );
-    return { branch, base, dryRun: true };
+    return { branch, base, dryRun: true, ...(derived.owns.length > 0 ? { derivedOwns: derived.owns } : {}) };
   }
+
+  // Live: an empty `owns` with nothing derivable is a skip (never a failure, as before).
+  if (!ownsProvided && derived.owns.length === 0) return { skipped: derived.why };
+  const owns = ownsProvided ? workOrder.owns : derived.owns;
+  if (!ownsProvided) log("publishWorkOrder", `derived owns for ${workOrder.id}: [${owns.join(", ")}] (${derived.why})`);
 
   let startBranch = "";
   let branchMade = false;
@@ -127,12 +222,13 @@ export async function publishWorkOrder(
     startBranch = currentBranch(repoDir);
     ensureBranch(repoDir, branch);
     branchMade = true;
-    commitOwned(repoDir, workOrder.owns, shortSubject(workOrder.title, 72));
+    commitOwned(repoDir, owns, shortSubject(workOrder.title, 72));
     push(repoDir, branch);
     const body = `${readReport(order.id, workOrder.id)}\n\nVerdict: ${workOrder.verdict}`;
     const prUrl = await openDraftPr({ repo, branch, title: shortSubject(workOrder.title, 100), body, token, base });
-    log("publishWorkOrder", `branch ${branch} pushed; draft PR ${prUrl ?? "(not opened: no token)"} on base ${base}`);
-    return { branch, base, dryRun: false, ...(prUrl ? { prUrl } : {}) };
+    const derivedNote = derived.owns.length > 0 ? ` derivedOwns=[${derived.owns.join(", ")}]` : "";
+    log("publishWorkOrder", `branch ${branch} pushed; draft PR ${prUrl ?? "(not opened: no token)"} on base ${base}${derivedNote}`);
+    return { branch, base, dryRun: false, ...(derived.owns.length > 0 ? { derivedOwns: derived.owns } : {}), ...(prUrl ? { prUrl } : {}) };
   } catch (e) {
     // Never throw into the fleet: a publish failure must not change a verdict or crash a tick.
     // Once the branch exists the folder is on it, so the caller must be told (failed) and the

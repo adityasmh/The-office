@@ -80,6 +80,47 @@ export function checkoutBranch(dir: string, name: string): void {
   if (!res.ok) throw new Error(`github: could not switch to ${name}: ${redactForLog(res.stderr.trim() || res.stdout.trim())}`);
 }
 
+/**
+ * Undo git's C-style quoting for a path that needed it (spaces and exotic bytes).
+ * `"a\tb"` -> `a<TAB>b`; a path without surrounding quotes is returned as-is.
+ */
+function unquoteGitPath(p: string): string {
+  if (p.length < 2 || !p.startsWith('"') || !p.endsWith('"')) return p;
+  return p
+    .slice(1, -1)
+    .replace(/\\(["\\tn]|[0-7]{1,3})/g, (_m, esc: string) => {
+      if (esc === "t") return "\t";
+      if (esc === "n") return "\n";
+      if (esc === '"') return '"';
+      if (esc === "\\") return "\\";
+      return String.fromCharCode(parseInt(esc, 8));
+    });
+}
+
+/**
+ * The repo-relative paths that currently differ from HEAD: modified, added or
+ * untracked files from `git status --porcelain`, one entry per file, always with
+ * forward slashes. A rename/copy reports its destination path. Read-only (no
+ * network, no state change); throws only when git cannot answer at all.
+ */
+export function changedPaths(dir: string): string[] {
+  // --untracked-files=all keeps the "one entry per FILE" promise: plain --porcelain
+  // collapses a whole untracked directory into a single "dir/" entry.
+  const res = git(dir, ["status", "--porcelain", "--untracked-files=all"]);
+  if (!res.ok) throw new Error(`github: could not read git status in ${dir}: ${redactForLog(res.stderr.trim())}`);
+  const seen = new Set<string>();
+  for (const raw of res.stdout.split(/\r?\n/)) {
+    const line = raw.replace(/\s+$/, "");
+    if (line.length < 4) continue; // "XY p" is the shortest possible entry
+    let p = line.slice(3); // drop the two status columns and their space
+    const arrow = p.indexOf(" -> "); // a rename/copy is "XY <old> -> <new>"
+    if (arrow !== -1) p = p.slice(arrow + 4);
+    p = unquoteGitPath(p.trim()).replace(/\\/g, "/");
+    if (p) seen.add(p);
+  }
+  return [...seen];
+}
+
 /** The first line of `text`, trimmed, cut to at most `max` chars (an ellipsis only when cut). */
 export function shortSubject(text: string, max: number): string {
   const first = String(text ?? "").split(/\r?\n/, 1)[0].trim();
@@ -151,7 +192,16 @@ export function commitOwned(dir: string, owns: string[], message: string): Commi
   const added = git(dir, ["add", "--", ...owns]);
   if (!added.ok) throw new Error(`github: git add failed for [${owns.join(", ")}]: ${redactForLog(added.stderr.trim())}`);
   const committed = git(dir, ["commit", "-m", message]);
-  if (!committed.ok) throw new Error(`github: git commit failed: ${redactForLog(committed.stderr.trim() || committed.stdout.trim())}`);
+  if (!committed.ok) {
+    const out = `${committed.stdout}\n${committed.stderr}`;
+    // A retry on a branch that already carries the commit has nothing new to commit: that is
+    // not a failure. Fall through so the caller can still push and open the PR.
+    if (/nothing to commit|nothing added to commit|no changes added to commit/i.test(out)) {
+      log("commitOwned", `nothing new to commit on ${branch} [${owns.join(", ")}]; branch already carries the work`);
+      return { committed: false, dryRun: false, branch, paths: [...owns] };
+    }
+    throw new Error(`github: git commit failed: ${redactForLog(committed.stderr.trim() || committed.stdout.trim())}`);
+  }
   log("commitOwned", `committed ${owns.length} owned path(s) on ${branch} [${owns.join(", ")}]`);
   return { committed: true, dryRun: false, branch, paths: [...owns] };
 }

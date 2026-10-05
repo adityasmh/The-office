@@ -33,7 +33,7 @@ import { chooseWorkerModel } from "./dispatch.js";
 import { withBusyAsync } from "./loopWatchdog.js";
 // GH-2 (docs/GITHUB_INTEGRATION_SPEC.md): optional GitHub PR publication for PASSed work
 // orders plus the CI-red downgrade. Off by default (FLEET_GITHUB unset => every call is a no-op).
-import { publishWorkOrder, applyCiDowngrade } from "./fleetGithub.js";
+import { publishWorkOrder, applyCiDowngrade, type PublishResult } from "./fleetGithub.js";
 
 // ── FLEET ──────────────────────────────────────────────────────────────
 // "Claude manages, jcode executes": the CEO types an order, Claude (manager)
@@ -86,6 +86,12 @@ export type WorkOrder = {
   branch?: string;
   /** set once a red CI check has downgraded this PASS to REDO, so it only happens once */
   ciDowngraded?: boolean;
+  /** F34 (docs/ORDER_2026-10-06_f34-retry-strip.md): the CI verdict the tick last read for this
+   *  work order's draft PR, for the dashboard's GitHub strip. Only written by the tick's existing
+   *  CI check, so it is unset until that check actually runs. */
+  ciState?: "RED" | "GREEN" | "PENDING";
+  /** F34: when the tick last refreshed ciState. */
+  ciCheckedAt?: string;
   // ── Laya's model pick (docs/LAYA_FIX_SPEC.md Fix 1) ──────────────────
   /** the jcode model this worker was spawned with (`jcode -p <provider> -m <model>`) */
   model?: string;
@@ -2929,13 +2935,26 @@ function ownedFileSnips(wo: WorkOrder, budget = OWNED_FILE_SNIPPET_CHARS): strin
   return out.join("\n\n") || "(none of the owned paths exist yet)";
 }
 
+/** F34: the outcome of one publish attempt, so the retry route can report it. `notFound` is the
+ *  route's 404 signal (unknown order or work order); every other refusal is a plain reason. */
+type PublishOutcome =
+  | { ok: true; prUrl?: string; branch?: string }
+  | { ok: false; reason: string; branch?: string; notFound?: true };
+
 /**
  * GH-2: on a PASS, publish the work order as a draft PR when FLEET_GITHUB is on. Never throws,
  * never changes the verdict, and adds no trace step when the feature is off (default).
+ *
+ * F34: returns the outcome (the retry route reports it) and takes a `publisher` test seam - the
+ * tick and the retry both use the real publishWorkOrder, the proof passes a stub.
  */
-async function publishPass(order: FleetOrder, wo: WorkOrder): Promise<void> {
+async function publishPass(
+  order: FleetOrder,
+  wo: WorkOrder,
+  publisher: (order: FleetOrder, wo: WorkOrder, repoDir: string) => Promise<PublishResult> = publishWorkOrder,
+): Promise<PublishOutcome> {
   try {
-    const res = await publishWorkOrder(order, wo, repoRoot());
+    const res = await publisher(order, wo, repoRoot());
     if ("skipped" in res) {
       // A failure AFTER the branch was made must be visible in the order trace; the plain
       // skipped results (feature off, not PASS, bad repo name) stay silent as before.
@@ -2943,7 +2962,7 @@ async function publishPass(order: FleetOrder, wo: WorkOrder): Promise<void> {
         if (res.branch) wo.branch = res.branch;
         pushTrace(order, { from: "Fleet", to: "GitHub", what: "PR publish failed", detail: res.skipped.slice(0, 200) });
       }
-      return;
+      return { ok: false, reason: res.skipped, ...(res.branch ? { branch: res.branch } : {}) };
     }
     wo.branch = res.branch;
     if (res.prUrl) wo.prUrl = res.prUrl;
@@ -2953,9 +2972,36 @@ async function publishPass(order: FleetOrder, wo: WorkOrder): Promise<void> {
       what: res.dryRun ? "PR dry-run" : "draft PR",
       detail: `${res.branch}${res.prUrl ? ` ${res.prUrl}` : " (dry-run, no change)"}`,
     });
+    return { ok: true, branch: res.branch, ...(res.prUrl ? { prUrl: res.prUrl } : {}) };
   } catch (e) {
     pushTrace(order, { from: "Fleet", to: "GitHub", what: "PR publish failed", detail: String(e).slice(0, 200) });
+    return { ok: false, reason: String(e).slice(0, 300) };
   }
+}
+
+/**
+ * F34: retry the draft-PR publish for a PASSed work order whose PR step failed after the push
+ * (permission, token, network). Same publishPass path as the first publish, so an existing branch
+ * is reused and nothing is ever force-pushed. Refuses anything that is not an unpublished PASS.
+ * `publisher` is the same test seam publishPass takes; the route leaves it at the default.
+ */
+export async function republishWorkOrder(
+  orderId: string,
+  workOrderId: string,
+  publisher?: (order: FleetOrder, wo: WorkOrder, repoDir: string) => Promise<PublishResult>,
+): Promise<PublishOutcome> {
+  const orders = loadFleetOrders();
+  const order = orders.find((o) => o.id === orderId);
+  const wo = order?.workOrders.find((w) => w.id === workOrderId);
+  // `notFound` is what the route turns into a 404; the other refusals are a plain {ok:false}.
+  if (!order || !wo) return { ok: false, notFound: true, reason: `no work order ${workOrderId} on order ${orderId}` };
+  if (wo.verdict !== "PASS") return { ok: false, reason: `verdict is ${wo.verdict ?? "unset"}, not PASS` };
+  if (wo.prUrl) return { ok: false, reason: "this work order already has a pull request" };
+  const out = await publishPass(order, wo, publisher);
+  // Persist what the attempt changed (branch, prUrl, the trace hop) so the dashboard shows the
+  // retry now instead of waiting for the next tick's saveFleetOrders.
+  saveFleetOrders(orders);
+  return out;
 }
 
 async function reviewWorkOrder(order: FleetOrder, wo: WorkOrder): Promise<void> {
@@ -3412,6 +3458,11 @@ export async function tickFleet(): Promise<{ advanced: number; reviewed: number;
       if (wo.state === "reviewed" && wo.verdict === "PASS" && wo.prUrl && !wo.ciDowngraded) {
         try {
           const d = await applyCiDowngrade(order, wo);
+          // F34 (docs/ORDER_2026-10-06_f34-retry-strip.md): keep the CI state the dashboard's
+          // GitHub strip shows. This reuses the verdict this same check just computed, so it
+          // adds no network call; when this block does not run the fields stay unset.
+          wo.ciState = d.verdict;
+          wo.ciCheckedAt = nowIso();
           if (d.downgraded) {
             advanced++;
             pushTrace(order, {

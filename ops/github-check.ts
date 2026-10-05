@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import {
   ensureRepo,
   branchFor,
+  changedPaths,
   commitOwned,
   push,
   openDraftPr,
@@ -176,6 +177,34 @@ async function main(): Promise<void> {
       on9 === "fleet/ord-1/wo-1" && detached9 === "" && after9 === "main",
       `on=${on9} detached="${detached9}" afterCheckoutBranch=${after9}`,
     );
+
+    // ---- 10. changedPaths: every changed FILE, one entry each, never a clean one --
+    {
+      const cp = path.join(tmp, "changed");
+      fs.mkdirSync(cp);
+      git(cp, ["init"]);
+      git(cp, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+      git(cp, ["config", "user.email", "gh1-check@example.test"]);
+      git(cp, ["config", "user.name", "GH-1 Check"]);
+      fs.mkdirSync(path.join(cp, "sub"));
+      fs.writeFileSync(path.join(cp, "sub", "tracked.txt"), "v1\n");
+      fs.writeFileSync(path.join(cp, "clean.txt"), "clean\n");
+      git(cp, ["add", "--", "sub/tracked.txt", "clean.txt"]);
+      git(cp, ["commit", "-m", "init"]);
+      fs.writeFileSync(path.join(cp, "sub", "tracked.txt"), "v2\n"); // modified
+      fs.mkdirSync(path.join(cp, "newdir"));
+      fs.writeFileSync(path.join(cp, "newdir", "untracked.txt"), "new\n"); // untracked dir
+      const changed = changedPaths(cp).sort();
+      const expect = ["newdir/untracked.txt", "sub/tracked.txt"];
+      let threw10 = false;
+      try {
+        changedPaths(plain); // a plain folder is not a repo
+      } catch {
+        threw10 = true;
+      }
+      const ok = JSON.stringify(changed) === JSON.stringify(expect) && !changed.includes("clean.txt") && threw10;
+      record("changedPaths lists modified+untracked files (one per file, no clean ones) and throws outside a repo", ok, `changed=[${changed.join(", ")}] threwOnPlain=${threw10}`);
+    }
 
     // ---- restore env and clean up --------------------------------------------
     delete process.env.FLEET_GITHUB;

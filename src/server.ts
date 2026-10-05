@@ -38,8 +38,12 @@ import {
 } from "./company/terminalReaper.js";
 import {
   type ApproveOptions, approveFleetOrder, cancelFleetOrder, createFleetOrder, fleetOrderDetail,
-  fleetOrdersData, reconcileFleetOnBoot, redoWorkOrder, startFleetWatcher, stopFleetWatcher,
+  fleetOrdersData, loadFleetOrders, reconcileFleetOnBoot, redoWorkOrder, republishWorkOrder, startFleetWatcher, stopFleetWatcher,
 } from "./company/fleet.js";
+// ENV-RELOAD (order F2-ENVRELOAD, 2026-10-06): re-read the small allow-list in this module
+// (GITHUB_TOKEN + the Fleet/budget knobs) into the RUNNING process, no restart. See the route
+// below: POST /company/reload-env, behind the same secret as every other POST under /company.
+import { reloadEnv } from "./company/envReload.js";
 import { openNeedsYouItems, resolveNeedsYou, managerQueueTick, startManagerQueueWatcher } from "./company/needsYouActions.js";
 // CEO APPROVAL POLICY (2026-09-30): routine retry/drop prompts are the manager's call.
 // They land in company/reports/manager-queue.json and are served read-only here.
@@ -1508,6 +1512,15 @@ app.post("/company/fleet/orders/:id/work/:wid/redo", async (req, res) => {
   catch (e) { res.status(400).json({ error: String(e) }); }
 });
 
+// F34: retry the draft-PR publish for a PASSed work order whose PR step failed (never force-pushes).
+app.post("/company/fleet/orders/:id/work/:wid/publish", async (req, res) => {
+  try {
+    const out = await republishWorkOrder(req.params.id, req.params.wid);
+    if (!out.ok && out.notFound) return res.status(404).json({ error: "not found", detail: out.reason });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: String(e) }); }
+});
+
 // Stop spawning queued work. Running terminals are NOT killed (the CEO closes them).
 app.post("/company/fleet/orders/:id/cancel", (req, res) => {
   try { res.json(cancelFleetOrder(req.params.id)); }
@@ -1762,6 +1775,29 @@ app.post("/company/system/resume", (req, res) => {
   try {
     const ids = Array.isArray(sessionIds) ? sessionIds.filter((s) => typeof s === "string") : undefined;
     res.status(202).json(startResume({ sessionIds: ids, snapshotTs }));
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ENV-RELOAD (order F2-ENVRELOAD, 2026-10-06): re-read .env for the allow-list in
+// src/company/envReload.ts, so a rotated GITHUB_TOKEN (or a flipped Fleet/budget knob) takes
+// effect without a restart. The mutation rides the same companyGuard secret as every other
+// POST under /company. Refused 409 while an order is being PLANNED or a work order is
+// STARTING, because swapping settings mid-step is what the refusal exists to prevent. The
+// answer carries key NAMES only - never a value from .env.
+app.post("/company/reload-env", (req, res) => {
+  try {
+    const busy = loadFleetOrders().find(
+      (o) => o.status === "planning" || o.workOrders.some((w) => w.state === "starting"),
+    );
+    if (busy) {
+      return res.status(409).json({
+        error: "busy",
+        detail: busy.status === "planning"
+          ? `order ${busy.id} is being planned; retry once planning settles`
+          : `order ${busy.id} has a work order starting; retry once it is running`,
+      });
+    }
+    res.json(reloadEnv());
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
