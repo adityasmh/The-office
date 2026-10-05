@@ -39,3 +39,5 @@ One real small order split across two workers produces two draft PRs from the ri
 
 ## Effort
 Three small workers. GH-1 first; GH-2 and GH-3 after it passes its check.
+
+Status 2026-10-06: GH-1 to GH-4 are built and the live pull request flow is enabled for adityasmh/The-office.
