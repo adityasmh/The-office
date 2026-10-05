@@ -7,8 +7,9 @@
 //   * OFF by default. FLEET_GITHUB must be "1" for anything to run; until then every
 //     export here is a no-op that returns a "skipped" result and makes no git/network call.
 //   * FLEET_GITHUB_DRY_RUN=1 turns publishWorkOrder into a log line with no git change.
-//   * Repo from FLEET_GITHUB_REPO (owner/name); token from GITHUB_TOKEN. The token is
-//     never logged (all output goes through redactForLog).
+//   * Repo from FLEET_GITHUB_REPO (owner/name); token from GITHUB_TOKEN. Base branch from
+//     FLEET_GITHUB_BASE (default "main"). The token is never logged (all output goes through
+//     redactForLog).
 //   * publishWorkOrder NEVER throws: every failure is caught and returned as { skipped }.
 //   * Node built-ins only; imports the finished helper from ./github.js, never edits it.
 import fs from "node:fs";
@@ -33,7 +34,7 @@ import type { FleetOrder, WorkOrder } from "./fleet.js";
 export type CiVerdict = "RED" | "GREEN" | "PENDING";
 
 export type PublishResult =
-  | { prUrl?: string; branch: string; dryRun: boolean }
+  | { prUrl?: string; branch: string; base: string; dryRun: boolean }
   | { skipped: string };
 
 function log(action: string, detail: string): void {
@@ -46,6 +47,11 @@ function repoName(): string {
 
 function repoToken(): string {
   return (process.env.GITHUB_TOKEN ?? "").trim();
+}
+
+/** The draft PR's base branch: FLEET_GITHUB_BASE when set, else "main". */
+function prBase(): string {
+  return (process.env.FLEET_GITHUB_BASE ?? "").trim() || "main";
 }
 
 // ── REPORT.md path (mirrors fleet.ts's reportPath; ids are sanitised the same way) ──
@@ -97,14 +103,15 @@ export async function publishWorkOrder(
   if (workOrder.verdict !== "PASS") return { skipped: `verdict is ${workOrder.verdict ?? "unset"}, not PASS` };
 
   const branch = branchFor(order.id, workOrder.id);
+  const base = prBase();
 
   // Dry-run (or a missing repo/token) must change nothing. Start no git or network work.
   if (cfg.dryRun) {
     log(
       "publishWorkOrder",
-      `DRY-RUN (FLEET_GITHUB_DRY_RUN=1) would branch ${branch}, commit [${workOrder.owns.join(", ")}], push and open a draft PR`,
+      `DRY-RUN (FLEET_GITHUB_DRY_RUN=1) would branch ${branch}, commit [${workOrder.owns.join(", ")}], push and open a draft PR on base ${base}`,
     );
-    return { branch, dryRun: true };
+    return { branch, base, dryRun: true };
   }
 
   try {
@@ -116,9 +123,9 @@ export async function publishWorkOrder(
     commitOwned(repoDir, workOrder.owns, workOrder.title);
     push(repoDir, branch);
     const body = `${readReport(order.id, workOrder.id)}\n\nVerdict: ${workOrder.verdict}`;
-    const prUrl = await openDraftPr({ repo, branch, title: workOrder.title, body, token });
-    log("publishWorkOrder", `branch ${branch} pushed; draft PR ${prUrl ?? "(not opened: no token)"}`);
-    return { branch, dryRun: false, ...(prUrl ? { prUrl } : {}) };
+    const prUrl = await openDraftPr({ repo, branch, title: workOrder.title, body, token, base });
+    log("publishWorkOrder", `branch ${branch} pushed; draft PR ${prUrl ?? "(not opened: no token)"} on base ${base}`);
+    return { branch, base, dryRun: false, ...(prUrl ? { prUrl } : {}) };
   } catch (e) {
     // Never throw into the fleet: a publish failure must not change a verdict or crash a tick.
     return { skipped: redactForLog(String(e)).slice(0, 300) };

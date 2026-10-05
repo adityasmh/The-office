@@ -148,6 +148,34 @@ async function main(): Promise<void> {
         woPr.verdict === "REDO";
       record("5. RED CI stub downgrades PASS -> REDO exactly once", ok, `d1=${JSON.stringify(d1)} verdict=${afterFirst} d2=${JSON.stringify(d2)}`);
     }
+
+    // ---- 6. no FLEET_GITHUB_BASE: the dry-run base is "main" ------------------
+    {
+      const prevBase = process.env.FLEET_GITHUB_BASE;
+      try {
+        delete process.env.FLEET_GITHUB_BASE;
+        const res = await fg.publishWorkOrder(order, wo, repo);
+        const ok = "base" in res && res.base === "main";
+        record('6. FLEET_GITHUB_BASE unset -> dry-run base is "main"', ok, `res=${JSON.stringify(res)}`);
+      } finally {
+        if (prevBase === undefined) delete process.env.FLEET_GITHUB_BASE;
+        else process.env.FLEET_GITHUB_BASE = prevBase;
+      }
+    }
+
+    // ---- 7. FLEET_GITHUB_BASE set: the dry-run base follows it -----------------
+    {
+      const prevBase = process.env.FLEET_GITHUB_BASE;
+      try {
+        process.env.FLEET_GITHUB_BASE = "fleet-orchestrator";
+        const res = await fg.publishWorkOrder(order, wo, repo);
+        const ok = "base" in res && res.base === "fleet-orchestrator";
+        record("7. FLEET_GITHUB_BASE=fleet-orchestrator -> dry-run base follows it", ok, `res=${JSON.stringify(res)}`);
+      } finally {
+        if (prevBase === undefined) delete process.env.FLEET_GITHUB_BASE;
+        else process.env.FLEET_GITHUB_BASE = prevBase;
+      }
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
