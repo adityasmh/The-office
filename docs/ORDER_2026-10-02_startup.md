@@ -1,0 +1,22 @@
+# Work order: start the company for today (2026-10-02, after last night's 19:00 planned shutdown)
+
+From: manager. Model: deepseek-flash (DeepSeek API, provider deepseek). Repo: C:\Users\user\Desktop\Default Project (Windows PowerShell).
+CEO said: "please continue. everything". Routine for you; do exactly the steps, nothing else.
+
+## Facts measured by the manager at 06:10 IST
+- Nothing listens on :8787 (router), :8000 (Laya), :9092 (Kafka). Machine woke at 06:07.
+- logs\shutdown.log: `shutdown-all.ps1` ran 2026-10-01 19:00:40. By design it DISABLES the scheduled tasks `LayaCompanyRouterSupervisor` and `LayaSupervisorWatchdog` (both are Disabled now) and killed router/workers/terminals. Fleet orders running at 19:00 show `fleet failed` at 13:30Z (fomupiu2hf, fomupf7f4a): that is the shutdown, not a real failure.
+- The watchdog kept trying `schtasks /run LayaCompanyRouterSupervisor` at 02:41-02:43 and got "disabled" errors (it did not know about the planned shutdown); another session (log logs\jcode-watchdog-fix.log, 02:45-02:49) is changing ops\supervisor-watchdog.ps1 so it respects shutdown. Do not touch those files.
+- Router history yesterday 18:49-18:50: the restart-2 router (pid 1972) exited after 28.6 s with exit code -1073740791 (0xC0000409, a fast-fail crash); the supervisor restarted it (pid 18936, healthy in 3.8 s). Cause unknown: report the router.crash.log / router.err.log lines around 13:19Z-13:21Z if you find any, do not investigate further.
+- Process creation is fast now (Defender exclusion applied by the CEO).
+
+## Steps (read docs/SHUTDOWN_SPEC.md section 3 and the header of ops\start-all.ps1 first)
+1. Run `powershell -NoProfile -ExecutionPolicy Bypass -File ops\start-all.ps1 -NoBrowser` (starts Laya on :8000, re-enables + starts the supervisor task, waits for the router on :8787). Do not kill anything. If something is not healthy after 3 minutes, read the logs (logs\laya.out.log, logs\router.supervisor.log, logs\router.crash.log) and report; fix only routine causes (stale lock logs\router-supervisor.lock whose pid is dead).
+2. Kafka: run `powershell -NoProfile -ExecutionPolicy Bypass -File ops\kafka-up.ps1` (LAYA_IGNORE_RAM_GUARD=1 is set; free RAM is ~4 GB). Wait for 127.0.0.1:9092 (netstat). Produce+consume proof with ops\kafka-smoke.ps1 only if it is read-only (it was verified read-only yesterday). Report the broker pid.
+3. Verify with real requests (90 s timeouts, no secrets printed): GET /health 200 (lagMs, lagP95Ms, lagMaxMs); GET /company/adaptive -> enabled, backend (expect kafka, brokerUp=true after step 2: the router reconnects in the background); GET /company/budget/real -> 200 (print Go windows % left, DeepSeek balance line, Claude status line); `.env` key names only: report whether FLEET_DEEPSEEK_ONLY, DEEPSEEK_DIRECT_ALL_HOURS, ADAPTIVE_ROUTING, KAFKA_BROKERS are present and their values (these four are not secrets; never print any other .env line).
+4. Watchdog: `schtasks /query /tn LayaSupervisorWatchdog`: it is Disabled by the shutdown. Do NOT enable it yet if ops\supervisor-watchdog.ps1 or its checks were modified in the last 2 hours (the other session is editing them): say so and leave it disabled; the manager decides. If untouched for 2 h, report that and still leave it disabled; the manager enables it.
+5. Resume: read the shutdown snapshot (company\snapshots, newest) and the System page's Resume list described in docs/SHUTDOWN_SPEC.md. List what was running at 19:00. Do NOT click "Resume all". Resume ONLY routine items one at a time through the router's own routes (fleet work-order redo: POST /company/fleet/orders/:id/work/:wid/redo; token from GET /company/auth/bootstrap, never print it), at most 4 in flight, and ONLY: fomupf7f4a (metrics stack, WO1), nothing else. Do not touch fomupiu2hf (manager decides), fomupf08jc/fomupgip32/fomupdiaz6/fomunypg1k (stuck 'reviewing' on a review parse bug, manager fixes the reviewer first). Anything that needs CEO approval (deleting data, spending, logins, outbound messages, publishing to the real site) is listed, not resumed.
+6. Report (15 lines max): what is up (pids, ports), health numbers, adaptive/kafka state, budget numbers, env key presence, what you resumed, what you left and why. Append a timestamped entry to docs/AGENT_COORDINATION.md.
+
+## Rules
+No secrets printed. No deletes. Do not edit source files or ops scripts. Do not touch the CEO's `cuda` terminal session, other workers' processes, or the watchdog scripts. No Slack or outbound messages. Report to the manager, not the CEO.

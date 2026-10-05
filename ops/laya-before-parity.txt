@@ -1,0 +1,9 @@
+# laya-gpu-bench  mode=parity  base=http://127.0.0.1:8000  mockMode=off  backend=laya
+# roster: project pmumhg71w "LiveFinal" agents=manager,enhancer,summarizer,opposer,tester,coder-1,coder-2
+# /health: {"status":"ok","loaded":["multilingual","typed-decisions","english"],"revisions":{"english":"55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851","multilingual":"55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851","typed-decisions":"55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"},"device":"cpu","device_is_preference":false,"checkpoint_devices":{"multilingual":"cpu","typed-decisions":"cpu","english":"cpu"},"cpu_fallbacks":{"multilingual":{"count":0,"last_reason":null},"typed-decisions":{"count":0,"last_reason":null},"english":{"count":0,"last_reason":null}}}
+# parity: 5 fixed questions through the real pipeline functions
+q1-single-file  agent=coder-1    conf= 0.64 parallel=no  | complexity=ROUTINE(0.79) | model=kimi-k2.7-code(0.07) | brain=SONNET(0.17) | route=claude-sonnet-5-5 via claude-subscription | 6214ms
+q2-tests        agent=tester     conf= 0.91 parallel=yes | complexity=STANDARD(0.37) | model=claude-opus-5-5(0.06) | brain=SONNET(0.28) | route=claude-sonnet-5-5 via claude-subscription | 6049ms
+q3-refactor     agent=coder-1    conf= 0.38 parallel=no  | complexity=DEMANDING(0.73) | model=claude-opus-5-5(0.08) | brain=OPUS(0.82) | route=claude-opus-5-5 via claude-subscription | 6413ms
+q4-review       agent=opposer    conf= 0.25 parallel=no  | complexity=STANDARD(0.25) | model=claude-opus-5-5(0.10) | brain=SONNET(0.19) | route=claude-sonnet-5-5 via claude-subscription | 8002ms
+q5-ambiguous    agent=enhancer   conf= 0.71 parallel=no  | complexity=ROUTINE(0.77) | model=kimi-k2.7-code(0.06) | brain=SONNET(0.16) | route=claude-sonnet-5-5 via claude-subscription | 5292ms

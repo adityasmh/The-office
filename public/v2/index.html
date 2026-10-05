@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark light" />
+<!-- Inline icon: avoids a /favicon.ico 404 in the console. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 29.5 16 16 29.5 2.5 16z' fill='%23b088f9'/%3E%3C/svg%3E" />
+<title>CEO Dashboard v2 — Local AI Company</title>
+<!-- Applies the saved theme before first paint so the page never flashes. -->
+<script>
+  try {
+    var t = localStorage.getItem("v2.theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* private mode: keep the dark default */ }
+</script>
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="shell">
+    <!-- Top bar: company, live counts, connection indicator. Filled by app.js. -->
+    <header class="topbar" id="appbar" role="banner">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">◆</span>
+        <span class="cname" id="company-name">Local AI Company</span>
+        <span class="sub">CEO dashboard v2</span>
+      </div>
+      <div class="stats" id="topstats" aria-live="polite" aria-label="Live company counts"></div>
+    </header>
+
+    <!-- Left nav; becomes a bottom bar under 860px (see style.css). -->
+    <nav class="nav" id="appnav" aria-label="Views">
+      <div class="nav-title">Views</div>
+      <div id="navlinks" class="nav-links"></div>
+      <div class="nav-foot">
+        <a href="/" title="The previous single-page dashboard">← old dashboard</a>
+      </div>
+    </nav>
+
+    <main class="main" id="appmain" role="main">
+      <div class="stale-banner" role="status">
+        <span class="dot dot-warn" aria-hidden="true"></span>
+        <span id="stale-text">Router unreachable — reconnecting. Counts below are the last known values.</span>
+      </div>
+      <div class="view" id="appview">
+        <div class="card"><div class="state"><span class="spinner" aria-hidden="true"></span><span>loading…</span></div></div>
+      </div>
+    </main>
+  </div>
+
+  <noscript>
+    <div class="card" style="margin:16px">
+      <div class="state state-error">
+        <span class="state-title">JavaScript is required</span>
+        <span>This dashboard is a plain ES-module app. Enable JavaScript, or use the
+          <a href="/">old dashboard</a>.</span>
+      </div>
+    </div>
+  </noscript>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

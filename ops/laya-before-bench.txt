@@ -1,0 +1,27 @@
+# laya-gpu-bench  mode=bench  base=http://127.0.0.1:8000  mockMode=off  backend=laya
+# roster: project pmumhg71w "LiveFinal" agents=manager,enhancer,summarizer,opposer,tester,coder-1,coder-2
+# /health: {"status":"ok","loaded":["multilingual","typed-decisions","english"],"revisions":{"english":"55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851","multilingual":"55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851","typed-decisions":"55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"},"device":"cpu","device_is_preference":false,"checkpoint_devices":{"multilingual":"cpu","typed-decisions":"cpu","english":"cpu"},"cpu_fallbacks":{"multilingual":{"count":0,"last_reason":null},"typed-decisions":{"count":0,"last_reason":null},"english":{"count":0,"last_reason":null}}}
+# bench: 20 sequential /v1/systemone calls, same payload as chooseAgent()
+call  1   1649 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  2   1526 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  3   1529 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  4   3958 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  5   1624 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  6   1533 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  7   1426 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  8   1604 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call  9   1774 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 10   2087 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 11   1665 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 12   1361 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 13   1360 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 14   1362 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 15   1424 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 16   2949 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 17   1873 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 18   1689 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 19   2622 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+call 20   1444 ms  agent=coder-1 conf=0.38 parallel_noul=0.48
+
+SUMMARY n=20 min=1360 p50=1604 p95=2949 max=3958 mean=1823 ms
+ANSWERS distinct=1 -> coder-1/0.38

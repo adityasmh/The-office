@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NY-UI view test</title>
+  <link rel="stylesheet" href="./style.css">
+  <style>
+    body { padding: 16px; }
+    #b, #a { min-height: 120px; }
+  </style>
+</head>
+<body>
+  <h2>Briefing view (mock data)</h2>
+  <div id="b"></div>
+  <h2>Assistant view (stubbed API)</h2>
+  <div id="a"></div>
+  <script type="module">
+    import { mount as mountBriefing } from "./views/briefing.js";
+    import { mount as mountAssistant } from "./views/assistant.js";
+
+    function esc(s) {
+      return String(s === null || s === undefined ? "" : s).replace(/[&<>"']/g, (c) => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+      ));
+    }
+    function ago() { return "now"; }
+    function hm() { return "00:00:00"; }
+    function navigate(h) { console.log("[navigate]", h); }
+    function poll(fn, ms) { fn(); return () => {}; }
+
+    const mockNeeds = [
+      {
+        id: "task:test:approve",
+        text: "Approve the office page restart.",
+        kind: "approve",
+        actions: [
+          { id: "approve", label: "Approve", effect: "approve_gate" },
+          { id: "drop", label: "Drop", effect: "drop_task" },
+        ],
+      },
+      {
+        id: "choice:test",
+        text: "Pick the cheaper model.",
+        kind: "choice",
+        question: "Which model should the worker use?",
+        actions: [
+          { id: "approve", label: "Kimi", effect: "retry_order" },
+          { id: "approve_alt", label: "DeepSeek", effect: "retry_order" },
+        ],
+      },
+      {
+        id: "provide:test",
+        text: "The Kimi key is missing.",
+        kind: "provide",
+        input: { name: "OPENCODE_API_KEY", label: "Kimi access key", secret: true, placeholder: "sk-opencode-..." },
+        actions: [
+          { id: "save_key_retry", label: "Save key and retry", effect: "provide_key" },
+          { id: "drop", label: "Drop", effect: "drop_order" },
+        ],
+      },
+      {
+        id: "external:test",
+        text: "Claude hit its spending limit.",
+        kind: "external",
+        question: "Raise the limit at claude.ai, use Kimi, or tell us you raised it.",
+        actions: [
+          { id: "open_limit_page", label: "Open Claude settings", effect: "open_link", url: "https://claude.ai/settings/usage" },
+          { id: "use_kimi", label: "Use Kimi", effect: "reissue_kimi" },
+          { id: "raised_retry", label: "I raised it", effect: "recheck_budget" },
+        ],
+      },
+    ];
+
+    const api = (path, opts) => {
+      if (path === "/api/needs-you") return Promise.resolve({ needsYou: mockNeeds });
+      if (path === "/company/briefing") return Promise.resolve({ needsYou: mockNeeds });
+      if (path === "/company/assistant/thread") return Promise.resolve({ status: "idle", messages: [] });
+      if (path === "/company/flow") return Promise.resolve({ tasks: [] });
+      return Promise.reject(new Error("not stubbed: " + path));
+    };
+
+    window.__nyUiTest = { briefingMounted: false, assistantMounted: false };
+
+    mountBriefing(document.getElementById("b"), { api, poll, esc, ago, hm, navigate, params: { mock: "1" } });
+    window.__nyUiTest.briefingMounted = true;
+
+    mountAssistant(document.getElementById("a"), { api, poll, esc, ago, hm, navigate, params: {} });
+    window.__nyUiTest.assistantMounted = true;
+
+    console.log("NY-UI test mounted");
+  </script>
+</body>
+</html>

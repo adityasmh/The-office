@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Keeps the Laya AI Company TTS server (127.0.0.1:8901) alive with the Joey (Qwen3-TTS) engine. Owned by Task Scheduler, outside any agent process tree. See ops/tts/register-tts-task.ps1 and docs/VOICE.md.</Description>
+    <URI>\LayaCompanyTtsServer</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>DESKTOP-FORIGOF\user</UserId>
+    </LogonTrigger>
+    <!-- Re-arm belt: if the server is ever killed, the scheduler brings it back
+         within 2 minutes. MultipleInstancesPolicy=IgnoreNew means this can
+         never start a second listener while one is alive. -->
+    <TimeTrigger>
+      <StartBoundary>2026-09-29T22:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <Repetition>
+        <Interval>PT2M</Interval>
+        <Duration>P365D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>DESKTOP-FORIGOF\user</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c set TTS_ENGINE=qwen3&amp;&amp; node tools\tts\server.mjs &gt;&gt; logs\tts-server.out.log 2&gt;&gt; logs\tts-server.err.log</Arguments>
+      <WorkingDirectory>C:\Users\user\Desktop\Default Project</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

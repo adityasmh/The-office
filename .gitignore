@@ -1,0 +1,53 @@
+# Secrets and local config: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/.claude/
+/.opencode/
+
+# Runtime data, logs, caches (root-level only, so src/company/ is kept)
+/company/
+/company-temp-*/
+/logs/
+/node_modules/
+/dist/
+/release/
+/release-prev/
+/release-staging/
+*.pid
+*.bak*
+*.log
+
+# Heavy local tooling, scratch harnesses and models
+/dev/
+/deps/
+/models/
+/vendor/
+/tools/
+ops/.protected-baseline.json
+
+# Scratch and temp files at the project root
+/tmp-*
+/tmp_*
+/%*%
+/%*%.dir
+/x.sessionName
+/replay_validate.txt
+/DOWN
+/ERR
+/POLLING
+/exit
+/map)
+/no
+/'
+/$($_.to)
+/{lagMs
+
+# Personal and local-only docs
+/docs/cv/
+/docs/CV_PROJECT_ENTRY.md
+/docs/fleet-case-study.html
+/docs/AGENT_COORDINATION.md
+/docs/perf/

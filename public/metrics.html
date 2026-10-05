@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Laya metrics</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e9ef; --dim:#939bab; --accent:#7cc4ff; --ok:#57d38c; --warn:#ffcc5c; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:12px; align-items:baseline; }
+  header h1 { font-size:18px; margin:0; }
+  header .sub { color:var(--dim); font-size:12px; }
+  header a { color:var(--accent); text-decoration:none; }
+  main { padding:16px 20px 40px; display:grid; gap:16px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 6px; }
+  .card .big { font-size:26px; font-variant-numeric:tabular-nums; }
+  .card .sub { color:var(--dim); font-size:12px; margin-top:4px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  section h2 { font-size:13px; margin:0 0 10px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:600; font-size:12px; }
+  td.num, th.num { text-align:right; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .dim { color:var(--dim); }
+  #banner { display:none; margin:0 0 12px; padding:10px 12px; border-radius:8px; background:#3a1f22; border:1px solid #6b2c31; color:#ffd3d3; }
+  .bar { height:8px; background:#22262f; border-radius:4px; overflow:hidden; margin-top:8px; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  footer { padding:0 20px 30px; color:var(--dim); font-size:12px; }
+  code { background:#22262f; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#9670; Laya metrics</h1>
+  <span id="mode" class="sub">loading...</span>
+  <span id="upd" class="sub"></span>
+  <span class="sub"><a href="/">dashboard</a> &middot; <a href="/adaptive.html">adaptive routing</a> &middot; <a href="http://127.0.0.1:8428/vmui" target="_blank" rel="noopener">VictoriaMetrics UI (/vmui)</a></span>
+</header>
+<main>
+  <div id="banner"></div>
+
+  <div class="grid">
+    <div class="card"><h2>Router event-loop lag</h2><div class="big" id="lag">-</div><div class="sub" id="lagSub">p95 / max since boot</div></div>
+    <div class="card"><h2>Free RAM</h2><div class="big" id="ram">-</div><div class="sub" id="ramSub">of total</div></div>
+    <div class="card"><h2>GPU VRAM</h2><div class="big" id="vram">-</div><div class="bar"><i id="vramBar" style="width:0%"></i></div><div class="sub" id="vramSub">used / total</div></div>
+    <div class="card"><h2>GPU</h2><div class="big" id="gpu">-</div><div class="sub" id="gpuSub">util / load / power</div></div>
+    <div class="card"><h2>Laya /health</h2><div class="big" id="laya">-</div><div class="sub" id="layaSub">last / p95 latency</div></div>
+    <div class="card"><h2>Kafka</h2><div class="big" id="kafka">-</div><div class="sub" id="kafkaSub">broker / consumer lag</div></div>
+    <div class="card"><h2>Measured spend</h2><div class="big" id="spend">-</div><div class="sub">agent budget ledger</div></div>
+    <div class="card"><h2>Queues</h2><div class="big" id="queues">-</div><div class="sub">needs-you / manager queue</div></div>
+  </div>
+
+  <section>
+    <h2>Fleet orders by status</h2>
+    <table><thead><tr><th>status</th><th class="num">orders</th></tr></thead><tbody id="orderRows"><tr><td colspan="2" class="dim">no data</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>Work orders by state</h2>
+    <table><thead><tr><th>state</th><th class="num">work orders</th></tr></thead><tbody id="woRows"><tr><td colspan="2" class="dim">no data</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>Scrape targets</h2>
+    <table><thead><tr><th>job</th><th>instance</th><th class="num">up</th><th class="num">last scrape</th></tr></thead><tbody id="targetRows"><tr><td colspan="4" class="dim">no data</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>Firing alerts</h2>
+    <table><thead><tr><th>alert</th><th>severity</th><th>since</th></tr></thead><tbody id="alertRows"><tr><td colspan="3" class="dim">nothing firing</td></tr></tbody></table>
+  </section>
+</main>
+<footer>
+  Plain page, 2 s refresh, reading VictoriaMetrics through <code>GET /company/metrics/query?q=</code>.
+  The full VictoriaMetrics UI is at <code>http://127.0.0.1:8428/vmui</code>. Alerts fire from <code>tools/vm/alerts.yml</code> (vmalert) into
+  <code>POST /company/alerts/webhook</code>: routine alerts land in the manager queue, ceo alerts also post one Slack message.
+</footer>
+
+<script>
+const REFRESH_MS = 2000;
+const idx = new Map(); // name -> [{labels, value, t}]
+
+function put(name, rows) { idx.set(name, rows); }
+function rows(name) { return idx.get(name) || []; }
+function one(name, labelFilter) {
+  for (const r of rows(name)) {
+    if (!labelFilter || Object.entries(labelFilter).every(([k, v]) => r.labels[k] === v)) return r;
+  }
+  return undefined;
+}
+function val(name, labelFilter) { const r = one(name, labelFilter); return r ? Number(r.value) : undefined; }
+
+function fmtBytes(b) {
+  if (b === undefined) return "-";
+  const gb = b / 1024 / 1024 / 1024;
+  return gb >= 1 ? gb.toFixed(2) + " GB" : (b / 1024 / 1024).toFixed(0) + " MB";
+}
+function fmtMs(ms) { return ms === undefined ? "-" : ms >= 1000 ? (ms / 1000).toFixed(2) + " s" : Math.round(ms) + " ms"; }
+function fmt(n, d = 2) { return n === undefined || !isFinite(n) ? "-" : Number(n).toFixed(d); }
+function cls(el, tone) { el.className = "big " + (tone || ""); }
+
+async function q(expr) {
+  const r = await fetch("/company/metrics/query?q=" + encodeURIComponent(expr), { cache: "no-store" });
+  const text = await r.text();
+  if (!r.ok) throw new Error("proxy HTTP " + r.status + ": " + text.slice(0, 120));
+  const j = JSON.parse(text);
+  return (j.data && j.data.result) || [];
+}
+
+function indexResult(rowsIn) {
+  const out = [];
+  for (const r of rowsIn) out.push({ labels: r.metric || {}, value: r.value ? r.value[1] : "0", t: r.value ? r.value[0] : 0 });
+  return out;
+}
+
+async function refresh() {
+  const banner = document.getElementById("banner");
+  try {
+    const [gpu, ram, health, router, kafka, adaptive, up, alerts] = await Promise.all([
+      q('{__name__=~"gpu_.*"}'),
+      q('{__name__=~"host_ram_.*"}'),
+      q('{__name__=~"laya_health_.*"}'),
+      q('{__name__=~"laya_router_.*"}'),
+      q('{__name__=~"kafka_.*"}'),
+      q('{__name__=~"laya_adaptive_.*"}'),
+      q('up{job=~"router|adaptive|host"}'),
+      q('ALERTS{alertstate="firing"}'),
+    ]);
+    banner.style.display = "none";
+
+    const names = ["gpu_", "host_ram_", "laya_health_", "laya_router_", "kafka_", "laya_adaptive_"];
+    for (const n of names) idx.delete(n);
+    for (const r of indexResult(gpu)) push("gpu", r);
+    for (const r of indexResult(ram)) push("host_ram", r);
+    for (const r of indexResult(health)) push("laya_health", r);
+    for (const r of indexResult(router)) push("laya_router", r);
+    for (const r of indexResult(kafka)) push("kafka", r);
+    for (const r of indexResult(adaptive)) push("laya_adaptive", r);
+    put("up", indexResult(up));
+    put("ALERTS", indexResult(alerts));
+    document.getElementById("upd").textContent = "updated " + new Date().toLocaleTimeString();
+    document.getElementById("mode").textContent = "VictoriaMetrics :8428 via router proxy";
+    render();
+  } catch (e) {
+    banner.style.display = "block";
+    banner.textContent = "Metrics stack is not answering: " + String(e.message || e) + " - start it with ops/metrics-up.ps1";
+    document.getElementById("mode").textContent = "stack down";
+  }
+}
+
+// The `{__name__=~"x_.*"}` form is answered by VictoriaMetrics with the metric name
+// inside `metric.__name__`, so index by that: one query per family, many series.
+function push(prefix, r) {
+  const name = r.labels.__name__ || "";
+  if (!name.startsWith(prefix)) return;
+  const list = idx.get(name) || [];
+  list.push(r);
+  idx.set(name, list);
+}
+
+function render() {
+  const lag = val("laya_router_eventloop_lag_ms");
+  const lagEl = document.getElementById("lag");
+  lagEl.textContent = fmtMs(lag);
+  cls(lagEl, lag === undefined ? "" : lag > 5000 ? "bad" : lag > 1000 ? "warn" : "ok");
+  document.getElementById("lagSub").textContent = "p95 " + fmtMs(val("laya_router_eventloop_lag_p95_ms")) + " / max " + fmtMs(val("laya_router_eventloop_lag_max_ms"));
+
+  const free = val("host_ram_free_bytes"), total = val("host_ram_total_bytes");
+  const ramEl = document.getElementById("ram");
+  ramEl.textContent = fmtBytes(free);
+  cls(ramEl, free === undefined ? "" : free < 5e8 ? "bad" : free < 1e9 ? "warn" : "ok");
+  document.getElementById("ramSub").textContent = "of " + fmtBytes(total);
+
+  const vramRatio = val("gpu_vram_used_ratio");
+  const vramEl = document.getElementById("vram");
+  vramEl.textContent = vramRatio === undefined ? "-" : (vramRatio * 100).toFixed(1) + " %";
+  cls(vramEl, vramRatio === undefined ? "" : vramRatio > 0.9 ? "bad" : vramRatio > 0.8 ? "warn" : "ok");
+  document.getElementById("vramBar").style.width = vramRatio === undefined ? "0%" : Math.min(100, vramRatio * 100) + "%";
+  document.getElementById("vramSub").textContent = fmtBytes(val("gpu_vram_used_bytes")) + " / " + fmtBytes(val("gpu_vram_total_bytes"));
+
+  const temp = val("gpu_temperature_celsius");
+  const gpuEl = document.getElementById("gpu");
+  gpuEl.textContent = temp === undefined ? "-" : temp.toFixed(0) + " \u00b0C";
+  cls(gpuEl, temp === undefined ? "" : temp > 85 ? "bad" : temp > 75 ? "warn" : "ok");
+  document.getElementById("gpuSub").textContent = "util " + fmt(val("gpu_utilization_percent"), 0) + " % / power " + fmt(val("gpu_power_watts"), 2) + " W";
+
+  const up = val("laya_health_up");
+  const layaEl = document.getElementById("laya");
+  layaEl.textContent = up === undefined ? "-" : up >= 1 ? "up" : "down";
+  cls(layaEl, up === undefined ? "" : up >= 1 ? "ok" : "bad");
+  document.getElementById("layaSub").textContent = "last " + fmtMs((val("laya_health_latency_seconds") || 0) * 1000) + " / p95 " + fmtMs((val("laya_health_latency_p95_seconds") || 0) * 1000);
+
+  const kup = val("kafka_up");
+  let consumerLag = 0, haveLag = false;
+  for (const r of rows("laya_adaptive_consumer_lag")) { consumerLag += Number(r.value) || 0; haveLag = true; }
+  const kEl = document.getElementById("kafka");
+  kEl.textContent = kup === undefined ? "-" : kup >= 1 ? "up" : "down";
+  cls(kEl, kup === undefined ? "" : kup >= 1 ? "ok" : "bad");
+  document.getElementById("kafkaSub").textContent = "consumer lag " + (haveLag ? Math.round(consumerLag) + " msgs" : "-");
+
+  const spend = val("laya_router_spend_usd_total");
+  document.getElementById("spend").textContent = spend === undefined ? "-" : "$" + spend.toFixed(4);
+
+  const needsYou = val("laya_router_needs_you_open");
+  let queueOpen = 0;
+  for (const r of rows("laya_router_manager_queue_items")) {
+    if (r.labels.state !== "resolved") queueOpen += Number(r.value) || 0;
+  }
+  document.getElementById("queues").textContent = needsYou === undefined ? "-" : needsYou + " / " + queueOpen;
+
+  fillTable("orderRows", rows("laya_router_fleet_orders"), "status", "orders");
+  fillTable("woRows", rows("laya_router_fleet_work_orders"), "state", "work orders");
+
+  const tr = document.getElementById("targetRows");
+  const ups = rows("up").slice().sort((a, b) => String(a.labels.job).localeCompare(String(b.labels.job)));
+  tr.innerHTML = ups.length
+    ? ups.map((r) => `<tr><td>${esc(r.labels.job)}</td><td>${esc(r.labels.instance)}</td><td class="num ${Number(r.value) >= 1 ? "ok" : "bad"}">${esc(r.value)}</td><td class="num dim">${r.t ? new Date(r.t * 1000).toLocaleTimeString() : "-"}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="dim">no data</td></tr>';
+
+  const ar = document.getElementById("alertRows");
+  const firing = rows("ALERTS");
+  ar.innerHTML = firing.length
+    ? firing.map((r) => `<tr><td>${esc(r.labels.alertname || "?")}</td><td class="${r.labels.severity === "ceo" ? "bad" : "warn"}">${esc(r.labels.severity || "routine")}</td><td class="dim">${r.t ? new Date(r.t * 1000).toLocaleTimeString() : "-"}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="dim">nothing firing</td></tr>';
+}
+
+function fillTable(id, list, labelKey, countLabel) {
+  const body = document.getElementById(id);
+  const sorted = list.slice().sort((a, b) => String(a.labels[labelKey]).localeCompare(String(b.labels[labelKey])));
+  body.innerHTML = sorted.length
+    ? sorted.map((r) => `<tr><td>${esc(r.labels[labelKey] || "?")}</td><td class="num">${esc(r.value)}</td></tr>`).join("")
+    : `<tr><td colspan="2" class="dim">no ${countLabel}</td></tr>`;
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

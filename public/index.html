@@ -1,0 +1,1800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CEO Dashboard — Local AI Company</title>
+<style>
+:root{
+  --bg:#0a0c11; --bg2:#0d1017; --panel:#12151f; --panel2:#161a26; --line:#232838; --line2:#2c3346;
+  --txt:#e7eaf3; --dim:#8b93a7; --dim2:#5d6579;
+  --accent:#5b8cff; --ok:#3fb950; --warn:#d29922; --err:#f85149; --purple:#a371f7;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:radial-gradient(1100px 520px at 12% -8%,#141a2b 0%,var(--bg) 62%) fixed;
+  color:var(--txt);font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{margin:0;font-weight:600}
+a{color:var(--accent)}
+.muted{color:var(--dim)}
+.tiny{font-size:10.5px}
+.small{font-size:11.5px}
+.grow{flex:1 1 auto}
+.right{margin-left:auto}
+.neg{color:var(--err)}
+.pos{color:var(--ok)}
+::selection{background:#2b4a8f}
+
+/* ---------- sticky top wrapper (banner + header share one sticky container) ---------- */
+.topwrap{position:sticky;top:0;z-index:60}
+.banner{
+  padding:9px 16px;font-weight:700;
+  background:linear-gradient(90deg,#3d0d0d,#5a1414);color:#ffd9d6;border-bottom:1px solid #7a2222;
+  display:flex;gap:10px;align-items:center
+}
+.banner .bdot{width:9px;height:9px;border-radius:50%;background:var(--err);box-shadow:0 0 0 0 rgba(248,81,73,.7);animation:pulse 1.6s infinite}
+.banner.stale{background:linear-gradient(90deg,#3a2c05,#4d3a06);color:#ffe9b3;border-bottom-color:#7a5f22}
+.banner.stale .bdot{background:var(--warn);animation:none;box-shadow:none}
+/* PERF-UI (docs/PERF_SPEC.md item 5): migration notice. The old dashboard now
+   refreshes every 10 s instead of 2 s (it polling /company/panel every 2 s was
+   the single biggest cause of the router being saturated) and points at /v2/. */
+.banner.notice{background:linear-gradient(90deg,#101a33,#152340);color:#cfe0ff;border-bottom-color:#2b4a8f;font-weight:500}
+.banner.notice .bdot{background:var(--accent);animation:none;box-shadow:none}
+.banner.notice a{color:#9dc0ff;text-decoration:underline}
+.banner.notice .btn{margin-left:auto}
+
+/* ---------- header ---------- */
+.hdr{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 16px;
+  background:linear-gradient(180deg,#141828,#101320);border-bottom:1px solid var(--line)
+}
+.hgroup{display:flex;align-items:center;gap:10px;min-width:0}
+.mark{color:var(--purple);font-size:16px}
+.cname{font-size:15px;letter-spacing:.02em}
+.ceo{color:var(--dim);font-size:11.5px;border-left:1px solid var(--line2);padding-left:10px;white-space:nowrap}
+.chips{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.chip{
+  background:var(--panel2);border:1px solid var(--line2);border-radius:999px;padding:3px 10px;
+  font-size:11px;color:var(--dim);white-space:nowrap
+}
+.chip b{color:var(--txt);font-size:12.5px;margin-right:3px}
+.chip.c-ok{border-color:#21542c;background:#0f1c13}
+.chip.c-ok b{color:#57d16b}
+.chip.c-warn{border-color:#5c4712;background:#1c1708}
+.chip.c-warn b{color:#e3b341}
+.chip.c-err{border-color:#5f1f1c;background:#1d1011}
+.chip.c-err b{color:#ff7b72}
+.clock{color:var(--txt);font-variant-numeric:tabular-nums}
+.clock.paused{color:var(--warn)}
+.tgl{display:inline-flex;align-items:center;gap:6px;color:var(--dim);font-size:11px;white-space:nowrap;cursor:pointer;user-select:none}
+.tgl input{accent-color:var(--accent);cursor:pointer}
+.btn{
+  background:var(--panel2);border:1px solid var(--line2);color:var(--txt);border-radius:7px;
+  padding:6px 12px;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap
+}
+.btn:hover{border-color:var(--accent);color:#fff}
+.btn.sm{padding:3px 9px;font-size:11px}
+.btn.primary{background:#1d3a7a;border-color:#2f5bb5;color:#eaf0ff}
+.btn.primary:hover{background:#24468f}
+.btn.approve{background:#12351c;border-color:#2a6b39;color:#b7f0c4;font-weight:700}
+.btn.approve:hover{background:#1a4a27;color:#fff}
+.btn[disabled]{opacity:.5;cursor:default}
+.in{
+  background:#0a0d14;border:1px solid var(--line2);color:var(--txt);border-radius:7px;
+  padding:6px 9px;font:inherit;font-size:11.5px
+}
+.in::placeholder{color:var(--dim2)}
+.in:focus{outline:none;border-color:var(--accent)}
+.filt{width:230px}
+.sel{max-width:150px}
+
+/* ---------- layout ---------- */
+.wrap{padding:14px;display:flex;flex-direction:column;gap:14px;max-width:1900px;margin:0 auto}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:14px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.flowwrap{display:grid;grid-template-columns:minmax(240px,340px) 1fr;min-height:260px}
+.flowlist{border-right:1px solid var(--line);max-height:560px;overflow-y:auto;background:#101320}
+.frow{padding:8px 11px;border-bottom:1px solid var(--line);cursor:pointer;border-left:3px solid transparent}
+.frow:hover{background:#151b29}
+.frow.active{background:#18202f;border-left-color:var(--accent)}
+.frow .ft{font-size:12px;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .fm{font-size:10.5px;color:var(--dim);margin-top:2px}
+.fst{display:inline-block;border-radius:999px;padding:0 7px;font-size:10px;border:1px solid var(--line2)}
+.fst.merged{color:var(--ok);border-color:#2a5a35}.fst.failed{color:var(--err);border-color:#6a2a2a}
+.fst.run{color:var(--warn);border-color:#5a4a1a}
+.flowdetail{max-height:560px;overflow-y:auto;padding:10px 13px}
+.hop{display:grid;grid-template-columns:62px 1fr;gap:8px;padding:7px 0;border-bottom:1px dashed var(--line)}
+.hop .hts{color:var(--dim2);font-size:10.5px;padding-top:2px}
+.hop .hw{font-size:12px}
+.who2{display:inline-block;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:700;background:#151a26;border:1px solid var(--line2)}
+.who2.ceo{color:#fff;border-color:#4a5578}.who2.asst{color:#7ee0c3;border-color:#2a5a4d}
+.who2.laya{color:#f0b75a;border-color:#5a4a1a}.who2.claude{color:#d9a2ff;border-color:#4a2f66}
+.who2.worker{color:#8fb4ff;border-color:#2c3f6a}
+.hop .hwhat{color:var(--txt);font-weight:600;margin:0 6px}
+.hop .hdet{color:#aab3c5;font-size:11px;margin-top:3px;white-space:pre-wrap;word-break:break-word;max-height:7.5em;overflow:hidden}
+.fresult{margin-top:10px;background:#0d1017;border:1px solid var(--line);border-radius:8px;padding:8px 10px;white-space:pre-wrap;font-size:11.5px;color:#c3cad9}
+@media (max-width:760px){.flowwrap{grid-template-columns:1fr}.flowlist{border-right:none;border-bottom:1px solid var(--line);max-height:220px}}
+.phead{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 13px;
+  background:linear-gradient(180deg,#171c2a,#131722);border-bottom:1px solid var(--line)
+}
+.phead h2{font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:#c8cfdf}
+.bigbadge{
+  font-size:12px;font-weight:700;color:#04120a;background:var(--ok);border-radius:999px;padding:2px 10px
+}
+.bigbadge.live{animation:glow 2s infinite}
+.legend{display:flex;gap:12px;flex-wrap:wrap;padding:7px 13px;border-bottom:1px solid var(--line);color:var(--dim);font-size:10.5px;background:#101320}
+.body{padding:12px 13px}
+.empty{color:var(--dim2);padding:16px;text-align:center;font-size:11.5px}
+.notice{
+  padding:8px 13px;border-bottom:1px solid var(--line);background:#0f1420;color:#b9c2d4;
+  font-size:11px;line-height:1.5
+}
+.notice b{color:#e6ebf6}
+.notice code{background:#181d29;border:1px solid var(--line2);border-radius:4px;padding:0 4px;color:#ffb4ae}
+.foot{padding:9px 13px;border-top:1px solid var(--line);background:#0d1119;color:var(--dim2);font-size:10.5px;line-height:1.55}
+.foot b{color:var(--dim)}
+.foot code{background:#181d29;border:1px solid var(--line2);border-radius:4px;padding:0 4px;color:#c3cad9}
+
+/* ---------- pills / dots / bars ---------- */
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:10.5px;border:1px solid transparent;white-space:nowrap}
+.p-running{background:#0f2213;color:#57d16b;border-color:#21542c}
+.p-queued{background:#1e1808;color:#e3b341;border-color:#5c4712}
+.p-done,.p-merged,.p-idle{background:#141a24;color:#9aa7bd;border-color:#2a3140}
+.p-error,.p-failed,.p-rejected,.p-budget_exhausted{background:#231011;color:#ff7b72;border-color:#5f1f1c}
+.p-thinking,.p-enhancing,.p-coding,.p-testing,.p-opposing,.p-summarizing,.p-adjudicating{background:#141d33;color:#8db4ff;border-color:#2a4272}
+.p-pending_intake,.p-pending_code,.p-pending_merge{background:#231c05;color:#f0c453;border-color:#5f4a12}
+.p-active{background:#0f2213;color:#57d16b;border-color:#21542c}
+.p-paused{background:#1e1808;color:#e3b341;border-color:#5c4712}
+.p-cheap,.p-mid,.p-frontier{background:#181c2b;color:#a9b3c9;border-color:#2b3244}
+.p-frontier{color:#c8a9ff;border-color:#42306b;background:#1b1630}
+.p-mid{color:#8db4ff;border-color:#2a4272;background:#141d33}
+
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;flex:0 0 8px}
+.d-ok{background:var(--ok)}
+.d-warn{background:var(--warn);box-shadow:0 0 0 0 rgba(210,153,34,.7);animation:pulse 1.8s infinite}
+.d-err{background:var(--err)}
+.d-idle{background:#6b7280}
+
+.bar{display:block;position:relative;height:6px;border-radius:4px;background:#1c2130;overflow:hidden;width:100%}
+.bar i{display:block;height:100%;border-radius:4px;transition:width .3s ease}
+.bar.thin{height:4px}
+.bar.big{height:11px;background:#171c28}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(210,153,34,.6)}70%{box-shadow:0 0 0 7px rgba(210,153,34,0)}100%{box-shadow:0 0 0 0 rgba(210,153,34,0)}}
+@keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(63,185,80,.55)}50%{box-shadow:0 0 0 6px rgba(63,185,80,0)}}
+@keyframes flash{0%,100%{background:transparent}35%{background:#2b2410}}
+.flash{animation:flash 1.6s ease}
+.tag{display:inline-block;background:#151a26;border:1px solid var(--line2);border-radius:6px;padding:2px 7px;margin:2px 4px 2px 0;font-size:10.5px;color:#c3cad9}
+.link{cursor:pointer}
+.link:hover{border-color:var(--accent);color:#fff}
+.live{color:var(--warn);font-size:10px;margin-left:auto}
+
+/* ---------- sessions board ---------- */
+.sess{overflow-x:auto}
+.sgrid{
+  display:grid;align-items:center;gap:8px;padding:6px 13px;min-width:1180px;
+  grid-template-columns:88px 104px 92px 158px minmax(240px,1fr) 156px 76px 88px 132px
+}
+.shead{
+  color:var(--dim2);font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+  border-bottom:1px solid var(--line);padding-top:8px;padding-bottom:6px
+}
+.srow{border-bottom:1px solid #191e2a;font-size:11.5px}
+.srow:hover{background:#141926}
+.srow.isrunning{background:linear-gradient(90deg,rgba(63,185,80,.10),transparent 34%);border-left:2px solid var(--ok);padding-left:11px}
+.srow.s-error{background:linear-gradient(90deg,rgba(248,81,73,.09),transparent 30%)}
+.c-dept,.c-role,.c-model{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.c-agent{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.c-agent em{display:block;color:var(--dim2);font-size:10px;font-style:normal}
+.c-task{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.c-task i{font-style:normal}
+.c-elapsed,.c-cost{font-variant-numeric:tabular-nums}
+.c-cost{color:#c9d2e4}
+.c-bar{display:flex;align-items:center;gap:6px}
+.c-bar em{font-style:normal;color:var(--dim2);font-size:10px;min-width:30px}
+
+/* ---------- budgets ---------- */
+.meter{padding:12px 13px;border-bottom:1px solid var(--line);background:#101320}
+.meterhead{display:flex;align-items:baseline;gap:8px;margin-bottom:7px;flex-wrap:wrap}
+.meterhead b{font-size:17px;color:#fff}
+.lbl{color:var(--dim2);font-size:10px;text-transform:uppercase;letter-spacing:.07em}
+.spark{margin-top:9px}
+.spark svg{width:100%;height:26px;display:block;background:#0c0f17;border:1px solid var(--line);border-radius:6px}
+.rollup{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:8px;padding:11px 13px;border-bottom:1px solid var(--line)}
+.rcard{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 9px}
+.rcard .rn{font-size:11.5px;margin-bottom:5px}
+.rcard .rr{color:var(--dim);font-size:10.5px;margin-bottom:6px;font-variant-numeric:tabular-nums}
+.bwrap{overflow-x:auto}
+.btable{min-width:1160px}
+.brow{
+  display:grid;align-items:center;gap:8px;padding:6px 13px;border-bottom:1px solid #191e2a;
+  grid-template-columns:172px 84px 118px 66px 84px 84px 88px minmax(150px,1fr) 54px 106px 150px
+}
+.bhead{color:var(--dim2);font-size:10px;text-transform:uppercase;letter-spacing:.07em;background:#101320}
+.brow:hover{background:#141926}
+.brow.tired{background:linear-gradient(90deg,rgba(248,81,73,.07),transparent 30%)}
+  /* Real-budget rows (CEO order 2026-10-01): agent, role, department, spent so
+     far, spent today, share of total, quota (always "no quota"). */
+  .rbrow{display:grid;align-items:center;gap:8px;padding:6px 13px;border-bottom:1px solid #191e2a;
+    grid-template-columns:200px 92px 140px 104px 104px 96px 84px}
+.b-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.b-name em{color:var(--dim2);font-size:10px;font-style:normal;margin-left:6px}
+.num{font-variant-numeric:tabular-nums;text-align:right}
+.b-bar{display:flex;align-items:center;gap:6px}
+.b-bar em{font-style:normal;color:var(--dim2);font-size:10px;min-width:46px}
+.b-set{display:flex;gap:5px;align-items:center}
+.numin{width:74px;text-align:right}
+.b-st{text-align:right}
+
+/* ---------- consoles ---------- */
+.console{display:grid;grid-template-columns:262px minmax(0,1fr);min-height:230px}
+.alist{border-right:1px solid var(--line);max-height:520px;overflow-y:auto;background:#101320}
+.agroup{color:var(--dim2);font-size:10px;text-transform:uppercase;letter-spacing:.07em;padding:8px 11px 4px}
+.arow{
+  display:flex;align-items:center;gap:7px;width:100%;text-align:left;background:transparent;border:none;
+  border-left:2px solid transparent;color:var(--txt);font:inherit;font-size:11.5px;padding:6px 10px;cursor:pointer
+}
+.arow:hover{background:#171d2b}
+.arow.active{background:#18202f;border-left-color:var(--accent)}
+.aname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
+.arole{color:var(--dim2);font-size:10px}
+.arole i{font-style:normal;color:#7d879e}
+.adetail{padding:12px 13px;max-height:520px;overflow-y:auto}
+.dt{display:flex;align-items:center;gap:8px;font-size:13px}
+.dmeta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:5px 12px;margin:9px 0}
+.kv{font-size:11px}
+.kv span{color:var(--dim2);margin-right:6px}
+.dblock{margin:10px 0}
+.dblock .bl{color:var(--dim);font-size:11px;margin-bottom:5px;font-variant-numeric:tabular-nums}
+.threadbox{margin-top:10px;max-height:260px;overflow-y:auto;background:#0d1017;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.msg{padding:5px 0;border-bottom:1px solid #171c26}
+.msg:last-child{border-bottom:none}
+.mh{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.who{color:var(--accent);font-weight:700;font-size:11px}
+.m-ceo .who{color:var(--purple)}
+.mtext{white-space:pre-wrap;word-break:break-word;color:#c9d2e4;font-size:11.5px;margin-top:3px}
+.mtext.dim{color:var(--dim);white-space:pre-wrap}
+.composer{margin-top:10px}
+.ta{width:100%;resize:vertical}
+.crow{display:flex;align-items:center;gap:9px;margin-top:6px;flex-wrap:wrap}
+.box{border-radius:8px;padding:8px 10px;margin-top:9px;font-size:11.5px;border:1px solid}
+.box.ok{background:#0f1c13;border-color:#21542c;color:#a9ebba}
+.box.warn{background:#1c1708;border-color:#5c4712;color:#efd189}
+.box.err{background:#1d1011;border-color:#5f1f1c;color:#ffb4ae}
+.box.info{background:#141a24;border-color:#2a3140;color:#aab3c5}
+.log{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:9px;background:#0f1219}
+.log .dec{margin:6px 0 0;padding-left:18px;color:#c9d2e4}
+.log .dec li{margin:2px 0}
+.disp{margin-top:7px}
+.disp .lbl{margin-right:7px}
+.athread{max-height:300px;overflow-y:auto;background:#0d1017;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:10px 0}
+.ahdr{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;background:#101320;border:1px solid var(--line);border-radius:8px}
+.abud{flex:1 1 200px;min-width:170px}
+
+/* ---------- gates ---------- */
+.gwall{display:flex;flex-direction:column;gap:8px;padding:11px 13px;border-bottom:1px solid var(--line)}
+.grow2{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:8px 10px}
+.grow2.awaiting{border-color:#5c4712;background:#191505}
+.g-req{color:var(--dim);flex:1 1 190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.projboard{padding:11px 13px;border-bottom:1px solid var(--line)}
+.projboard h3{font-size:11.5px;margin-bottom:7px;color:#cfd6e6}
+.tbrow{display:grid;grid-template-columns:88px minmax(180px,1fr) 112px 130px;gap:9px;align-items:center;padding:5px 7px;border-bottom:1px solid #191e2a;font-size:11.5px}
+.tbhead{color:var(--dim2);font-size:10px;text-transform:uppercase;letter-spacing:.07em}
+.tlines{border-left:2px solid var(--line2);margin:6px 0 4px 3px;padding-left:9px}
+.tline{color:var(--dim2);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tline b{color:var(--dim);font-weight:600}
+
+/* ---------- org ---------- */
+.org{padding:11px 13px}
+.odept{border:1px solid var(--line);border-radius:8px;margin-bottom:9px;background:#101320;overflow:hidden}
+.ohead{display:flex;align-items:center;gap:9px;padding:8px 10px;cursor:pointer;background:var(--panel2);border:none;width:100%;color:var(--txt);font:inherit;font-size:12px;text-align:left}
+.ohead:hover{background:#1a2030}
+.obody{padding:9px 11px}
+.oprog{border-left:2px solid var(--line2);padding-left:10px;margin:7px 0}
+.oprog .ph{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11.5px}
+.oteam{color:var(--dim2);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:6px 0 3px}
+.oagents{display:flex;flex-wrap:wrap;gap:6px}
+.oagent{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:3px 8px;font-size:11px}
+.oagent .pct{color:var(--dim);font-variant-numeric:tabular-nums}
+@media(max-width:760px){
+  .console{grid-template-columns:1fr}
+  .alist{border-right:none;border-bottom:1px solid var(--line);max-height:210px}
+  .filt{width:100%}
+}
+</style>
+</head>
+<body>
+<noscript><div class="banner"><span class="bdot"></span>This dashboard needs JavaScript enabled.</div></noscript>
+
+<div class="topwrap">
+<div id="v2notice" class="banner notice">
+  <span class="bdot" aria-hidden="true"></span>
+  <span>This is the <b>old</b> dashboard (refreshes every 10&nbsp;s). The current one loads from cache and updates per view:
+    <a href="/v2/">CEO Dashboard v2</a> &mdash; Briefing, Terminals, Flow, Fleet, Office.</span>
+  <a class="btn" href="/adaptive.html">Adaptive routing</a>
+  <a class="btn primary" href="/v2/">Open v2</a>
+</div>
+<div id="banner" class="banner" style="display:none"><span class="bdot"></span><span id="bannerText"></span></div>
+
+<header class="hdr">
+  <div class="hgroup">
+    <span class="mark">&#9670;</span>
+    <h1 id="companyName" class="cname">Local AI Company</h1>
+    <span id="ceoLine" class="ceo">CEO &middot; —</span>
+  </div>
+  <div id="chips" class="chips"></div>
+  <div class="hgroup right">
+    <span id="clock" class="clock">--:--:--</span>
+    <span id="lastUpd" class="muted tiny">last updated —</span>
+    <label class="tgl" title="Stop polling and freeze this view">
+      <input type="checkbox" id="pauseToggle" /> pause auto-refresh
+    </label>
+    <button class="btn" id="refreshBtn" data-act="refresh">&#8635; refresh</button>
+  </div>
+</header>
+</div>
+
+<main class="wrap">
+
+  <!-- 1b. FLOW: who handed what to whom, per task (GET /company/flow) -->
+  <section class="panel" id="flowPanel">
+    <div class="phead">
+      <h2>Flow &mdash; how each order moved</h2>
+      <span class="muted small">You &rarr; Assistant &rarr; Laya (team) &rarr; Claude (manager) &rarr; Laya (model) &rarr; worker &rarr; Claude review &rarr; Assistant &rarr; You</span>
+    </div>
+    <div class="flowwrap">
+      <div id="flowList" class="flowlist"><div class="muted small" style="padding:12px">loading…</div></div>
+      <div id="flowDetail" class="flowdetail"><div class="muted small" style="padding:12px">Pick a task on the left to see its hand-off chain.</div></div>
+    </div>
+  </section>
+
+  <!-- 2. SESSIONS BOARD (hero, full width) -->
+  <section class="panel">
+    <div class="phead">
+      <h2>Sessions board</h2>
+      <span id="runBadge" class="bigbadge">0 running</span>
+      <span id="sessMeta" class="muted small"></span>
+      <div class="grow"></div>
+      <input id="sessFilter" class="in filt" placeholder="filter task / agent / role / dept&hellip;" />
+      <select id="sessStatus" class="in sel">
+        <option value="all">all statuses</option>
+        <option value="running">running</option>
+        <option value="queued">queued</option>
+        <option value="done">done</option>
+        <option value="error">error</option>
+      </select>
+      <label class="tgl"><input type="checkbox" id="onlyRunning" /> only running</label>
+    </div>
+    <div class="legend">
+      <span><span class="dot d-ok"></span> running</span>
+      <span><span class="dot d-warn"></span> queued</span>
+      <span><span class="dot d-idle"></span> done</span>
+      <span><span class="dot d-err"></span> error</span>
+      <span class="muted">auto-refresh every 10s &middot; newest first &middot; cost = measured spend for that session</span>
+    </div>
+    <div id="sessionsBody"></div>
+  </section>
+
+  <div class="grid2">
+    <!-- 3. BUDGET (real numbers: provider limits + measured spend; no quotas) -->
+    <section class="panel">
+      <div class="phead">
+        <h2>Budget &mdash; real numbers</h2>
+        <div class="grow"></div>
+        <span id="budMeta" class="muted small"></span>
+      </div>
+      <div class="notice">
+        There are <b>no per-agent quotas</b> any more: nobody is refused work for a spend cap. What
+        actually limits work is the provider &mdash; OpenCode Go's windows, the DeepSeek credit balance,
+        and the Claude subscription. Numbers below are read from the provider or measured from real
+        calls; anything we cannot measure says <i>not measured</i> instead of a number.
+      </div>
+      <div id="budgetsBody"></div>
+      <div class="foot" id="budFoot">
+        <b>Where these numbers come from.</b> OpenCode Go windows: the Go quota endpoint, with the key
+        this company already holds (<code>src/company/usage.ts</code>). DeepSeek: <code>GET /user/balance</code>
+        with <code>DEEPSEEK_API_KEY</code> (never printed or returned) plus the off-peak clock
+        (<code>src/company/offpeak.ts</code>). Claude: <code>jcode usage --json --no-update</code>; it is a
+        subscription, so there is no dollar budget. Spend: the per-call cost already recorded in
+        <code>company/projects/*/cost.jsonl</code>, with per-agent attribution from
+        <code>company/budgets.json</code>. Read it as: provider limit = what stops work, measured spend =
+        what was actually recorded, “spent so far” = a read-only record per agent, not a limit.
+      </div>
+    </section>
+
+    <!-- 4. ASSISTANT CONSOLE -->
+    <section class="panel">
+      <div class="phead">
+        <h2>Assistant console</h2>
+        <span id="assStatus" class="pill p-idle">idle</span>
+        <div class="grow"></div>
+        <label class="tgl" title="Start dispatched work immediately (autoRun)">
+          <input type="checkbox" id="autoRun" checked /> auto-run dispatched work
+        </label>
+      </div>
+      <div id="assistantBody"></div>
+    </section>
+  </div>
+
+  <div class="grid2">
+    <!-- 5. AGENT CONSOLE -->
+    <section class="panel">
+      <div class="phead">
+        <h2>Agent console</h2>
+        <div class="grow"></div>
+        <label class="tgl" title="Unchecked sends run:false (queue only)">
+          <input type="checkbox" id="execNow" checked /> execute now (else queue)
+        </label>
+      </div>
+      <div id="agentsBody"></div>
+    </section>
+
+    <!-- 7. GATES -->
+    <section class="panel">
+      <div class="phead">
+        <h2>Gates &amp; task board</h2>
+        <div class="grow"></div>
+        <span id="gateMeta" class="muted small"></span>
+      </div>
+      <div id="gatesBody"></div>
+    </section>
+  </div>
+
+  <!-- 6. ORG VIEW -->
+  <section class="panel">
+    <div class="phead">
+      <h2>Org view</h2>
+      <div class="grow"></div>
+      <span id="orgMeta" class="muted small"></span>
+    </div>
+    <div id="orgBody"></div>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* =====================================================================
+     STATE
+     ===================================================================== */
+  var S = {
+    panel: null,
+    online: true,
+    lastError: "",
+    lastUpdated: 0,
+    paused: false,
+    tickCount: 0,
+    inFlight: false,
+
+    // sessions filters
+    q: "",
+    statusFilter: "all",
+    onlyRunning: false,
+
+    // agent console
+    selectedAgent: null,
+    threadById: {},     // agentId -> { messages, err, at }
+    threadFails: {},
+    agentSend: {},      // agentId -> { state, text, reply, sessionId, error, ts }
+
+    // assistant console
+    assistantThread: null, // null = not fetched yet
+    assistantThreadErr: "",
+    assistantFails: 0,
+    assistantLog: [],
+    assistantBusy: false,
+
+    // misc
+    orgOpen: {},
+    drafts: {},
+    flash: "",
+    _bidx: null,
+    _bidxPanel: null
+  };
+
+  /* =====================================================================
+     SMALL HELPERS (pure)
+     ===================================================================== */
+  function asArray(x) { return Array.isArray(x) ? x : []; }
+  function num(v, d) {
+    if (typeof v === "number" && isFinite(v)) return v;
+    var n = typeof v === "string" ? parseFloat(v) : NaN;
+    return isFinite(n) ? n : (d === undefined ? 0 : d);
+  }
+  function str(v) { return v === null || v === undefined ? "" : String(v); }
+  function oneLine(s) { return str(s).replace(/\s+/g, " ").trim(); }
+  function trunc(s, n) { var t = str(s); return t.length > n ? t.slice(0, n - 1) + "\u2026" : t; }
+  function esc(s) {
+    return str(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function cls(s) { return str(s).toLowerCase().replace(/[^a-z_]/g, "") || "unknown"; }
+  function enc(s) { return encodeURIComponent(str(s)); }
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  function hhmmss(d) { return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds()); }
+  function nowIso() { return new Date().toISOString(); }
+  function fmtTs(t) {
+    var ms = Date.parse(str(t));
+    if (!isFinite(ms)) return str(t) ? trunc(str(t), 19) : "";
+    var d = new Date(ms);
+    return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+  function tsms(t) { var v = Date.parse(str(t)); return isFinite(v) ? v : 0; }
+  function hash(s) {
+    var h = 5381, i;
+    s = str(s);
+    for (i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return h;
+  }
+  function sigOf() {
+    var parts = [], i;
+    for (i = 0; i < arguments.length; i++) {
+      try { parts.push(JSON.stringify(arguments[i])); } catch (e) { parts.push("?"); }
+    }
+    return String(hash(parts.join("\u0001")));
+  }
+  // money: $0.0000 for small values, $0.00 from $1 up
+  function money(v) {
+    var n = num(v, 0), a = Math.abs(n);
+    return "$" + (a !== 0 && a < 1 ? n.toFixed(4) : n.toFixed(2));
+  }
+  function pct(v) { var n = num(v, 0); return Math.max(0, Math.min(100, n)); }
+  function dur(fromIso, toIso) {
+    var a = tsms(fromIso);
+    if (!a) return "\u2014";
+    var b = toIso ? tsms(toIso) : Date.now();
+    var s = Math.max(0, Math.floor((b - a) / 1000));
+    if (s < 60) return s + "s";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "m" + pad2(s % 60) + "s";
+    return Math.floor(m / 60) + "h" + pad2(m % 60) + "m";
+  }
+  function barColor(pctUsed) {
+    var left = 100 - pct(pctUsed);
+    if (left > 50) return "var(--ok)";
+    if (left >= 10) return "var(--warn)";
+    return "var(--err)";
+  }
+  function barHtml(usedPct, extraClass) {
+    var p = pct(usedPct);
+    return '<span class="bar' + (extraClass ? " " + extraClass : "") + '">' +
+      '<i style="width:' + p.toFixed(1) + "%;background:" + barColor(p) + '"></i></span>';
+  }
+  function pill(status, label) {
+    if (status === null || status === undefined || status === "") return "";
+    return '<span class="pill p-' + cls(status) + '">' + esc(label === undefined ? status : label) + "</span>";
+  }
+  function dot(kind) { return '<span class="dot d-' + cls(kind) + '"></span>'; }
+  function tierPill(tier) {
+    var t = str(tier) || "unknown";
+    return '<span class="pill p-' + cls(t) + '">' + esc(t) + "</span>";
+  }
+  function agentDot(a) {
+    var st = str((a && a.status) || "idle");
+    if ((a && a.running) || st === "running") return '<span class="dot d-warn" title="running"></span>';
+    if (st === "error") return '<span class="dot d-err" title="error"></span>';
+    return '<span class="dot d-ok" title="idle"></span>';
+  }
+  function kv(k, v) {
+    return '<div class="kv"><span>' + esc(k) + "</span>" + esc(v === "" || v === undefined || v === null ? "\u2014" : v) + "</div>";
+  }
+
+  /* =====================================================================
+     DOM / IO
+     ===================================================================== */
+  function byId(id) { return document.getElementById(id); }
+  function setText(id, txt) {
+    var e = byId(id);
+    if (e && e.textContent !== txt) e.textContent = txt;
+  }
+  function elValue(id, fallback) {
+    var e = byId(id);
+    return e && typeof e.value === "string" ? e.value : (fallback === undefined ? "" : fallback);
+  }
+  function elChecked(id, fallback) {
+    var e = byId(id);
+    return e && typeof e.checked === "boolean" ? e.checked : !!fallback;
+  }
+  function draftOf(id) { return S.drafts[id] === undefined ? "" : S.drafts[id]; }
+
+  // Paint a container only when its data signature changed (keeps focus/caret).
+  function paint(id, sig, html) {
+    var el = byId(id);
+    if (!el) return;
+    var key = String(sig);
+    if (el.__sig === key) return;
+
+    var ae = document.activeElement;
+    var focus = null;
+    if (ae && el.contains && el.contains(ae) && ae.id) {
+      focus = { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd, type: ae.type };
+    }
+    var scrolls = [];
+    var keep = el.querySelectorAll ? el.querySelectorAll("[data-scrollkey]") : [];
+    for (var i = 0; i < keep.length; i++) {
+      scrolls.push([keep[i].getAttribute("data-scrollkey"), keep[i].scrollTop, keep[i].scrollHeight - keep[i].clientHeight - keep[i].scrollTop]);
+    }
+
+    el.innerHTML = html;
+    el.__sig = key;
+
+    // restore user drafts (never re-emit them through HTML)
+    var fields = el.querySelectorAll ? el.querySelectorAll("input,textarea") : [];
+    for (var j = 0; j < fields.length; j++) {
+      var d = S.drafts[fields[j].id];
+      if (d !== undefined && d !== null && fields[j].type !== "checkbox") fields[j].value = d;
+    }
+    for (var k = 0; k < scrolls.length; k++) {
+      var n = el.querySelector('[data-scrollkey="' + scrolls[k][0] + '"]');
+      if (n) n.scrollTop = scrolls[k][2] <= 2 ? n.scrollHeight : scrolls[k][1];
+    }
+    if (focus) {
+      var f = byId(focus.id);
+      if (f) {
+        try {
+          if (f.focus) f.focus({ preventScroll: true });
+          if (focus.s !== null && focus.s !== undefined && f.setSelectionRange && focus.type !== "checkbox") {
+            f.setSelectionRange(focus.s, focus.e);
+          }
+        } catch (e) { /* focus restore is best effort */ }
+      }
+    }
+  }
+
+  function errText(e) {
+    if (!e) return "unknown error";
+    if (e.kind === "network") return "network error (" + str(e.message) + ")";
+    if (e.status === 404) return "HTTP 404 \u2014 endpoint not found (server may be running older code)";
+    return str(e.message) || "request failed";
+  }
+
+  /* Trust boundary (docs/CEO_RUNBOOK.md §0): the control plane requires
+     X-Company-Token on every /company/* mutation and on the SSE stream. This
+     page is served from the same loopback origin, so it fetches the secret once
+     from the loopback-only bootstrap endpoint and reuses it. */
+  var _companyToken = null;
+  function companyToken() {
+    if (_companyToken !== null) return _companyToken;
+    _companyToken = fetch("/company/auth/bootstrap", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { return (d && d.token) || ""; })
+      .catch(function () { return ""; });
+    return _companyToken;
+  }
+
+  function api(path, opts) {
+    var o = opts || {};
+    var init = { method: o.method || "GET", cache: "no-store", headers: {} };
+    if (o.signal) init.signal = o.signal; // PERF-PANEL: callers may bound a request
+    if (o.body !== undefined) {
+      init.method = o.method || "POST";
+      init.headers["content-type"] = "application/json";
+      init.body = JSON.stringify(o.body);
+    }
+    return companyToken().then(function (t) {
+      if (t) init.headers["x-company-token"] = t;
+      return fetch(path, init);
+    }).then(function (r) {
+      return r.text().then(function (txt) {
+        var data = null;
+        try { data = txt ? JSON.parse(txt) : null; } catch (e) { data = null; }
+        if (!r.ok) {
+          var msg = (data && (data.error || data.message)) || ("HTTP " + r.status);
+          var err = new Error(msg);
+          err.status = r.status;
+          err.data = data;
+          err.kind = "http";
+          throw err;
+        }
+        if (data === null) {
+          var e2 = new Error("invalid JSON from " + path + " (content-type " + r.headers.get("content-type") + ")");
+          e2.kind = "parse";
+          throw e2;
+        }
+        return data;
+      });
+    }, function (e) {
+      var err = new Error(e && e.message ? e.message : String(e));
+      err.kind = "network";
+      throw err;
+    });
+  }
+
+  /* =====================================================================
+     PANEL DERIVATION (defensive: sessions/budgets/assistant/gates may be missing)
+     ===================================================================== */
+  function budgetIndex(P) {
+    if (S._bidx && S._bidxPanel === P) return S._bidx;
+    var m = {}, i, j, arr, b, a, keys;
+    P = P || {};
+    // canonical rows: keyed by the row's OWN agentId, which is the composite "<projectId>::<agentId>"
+    // string the budget API expects (report F-04).
+    arr = asArray(P.budgets && P.budgets.byAgent);
+    for (i = 0; i < arr.length; i++) {
+      b = arr[i];
+      if (b && b.agentId) m[str(b.agentId)] = b;
+    }
+    // agents[] rows carry their own budget + agentKey; alias them so the UI can look a row up
+    // by composite key, by agentKey, or by bare id (first wins, same as the server's resolveKey).
+    arr = asArray(P.agents);
+    for (i = 0; i < arr.length; i++) {
+      a = arr[i] || {};
+      if (!a.budget) continue;
+      keys = [str(a.budget.agentId), str(a.agentKey), str(a.agentId)];
+      for (j = 0; j < keys.length; j++) if (keys[j] && !m[keys[j]]) m[keys[j]] = a.budget;
+    }
+    S._bidx = m;
+    S._bidxPanel = P;
+    return m;
+  }
+  // Composite addressing key: agentKey when the panel provides it (bare ids repeat across projects),
+  // else the bare agentId (report F-13).
+  function keyOf(a) { return str(a && (a.agentKey || a.agentId)) || ""; }
+  // Cap row for a session: budgets are keyed "<projectId>::<role>", sessions carry the bare id.
+  function sessionCap(P, x) {
+    if (!x) return null;
+    var k = str(x.projectId) && str(x.role) ? str(x.projectId) + "::" + str(x.role) : "";
+    return (k ? budgetOf(P, k) : null) || budgetOf(P, x.agentId) || null;
+  }
+  function budgetOf(P, agentId) {
+    if (!agentId) return null;
+    var b = budgetIndex(P)[str(agentId)];
+    return b || null;
+  }
+  function budgetList(P) {
+    P = P || {};
+    var list = asArray(P.budgets && P.budgets.byAgent).slice();
+    if (!list.length) {
+      var ag = asArray(P.agents);
+      for (var i = 0; i < ag.length; i++) if (ag[i] && ag[i].budget) list.push(ag[i].budget);
+    }
+    return list;
+  }
+  function agentList(P) {
+    P = P || {};
+    if (Array.isArray(P.agents)) return P.agents;
+    // fallback: derive from projects -> teams -> agents (older payloads)
+    var out = [], bp = asArray(P.projects), i, j, k;
+    for (i = 0; i < bp.length; i++) {
+      var p = bp[i] || {};
+      var teams = asArray(p.teams);
+      for (j = 0; j < teams.length; j++) {
+        var agents = asArray(teams[j] && teams[j].agents);
+        for (k = 0; k < agents.length; k++) {
+          var a = agents[k] || {};
+          out.push({
+            agentId: a.id, name: a.name, role: a.role, roleName: a.role,
+            departmentId: p.departmentId, departmentName: deptNameOf(P, p.departmentId),
+            projectId: p.id, projectName: p.name, modelId: a.modelId,
+            status: "idle", running: false, budget: a.budget || null,
+            lastMessage: "", threadDepth: 0
+          });
+        }
+      }
+    }
+    return out;
+  }
+  function deptNameOf(P, deptId) {
+    var d = asArray((P || {}).departments);
+    for (var i = 0; i < d.length; i++) if (d[i] && str(d[i].id) === str(deptId)) return str(d[i].name);
+    return "";
+  }
+  function countTasks(P) {
+    var ps = asArray((P || {}).projects), n = 0;
+    for (var i = 0; i < ps.length; i++) n += asArray(ps[i] && ps[i].tasks).length;
+    return n;
+  }
+  function visualOf(P) {
+    P = P || {};
+    var v = P.visual || {}, s = P.sessions || {}, b = P.budgets || {}, items = asArray(s.items), i;
+    var r = 0, q = 0;
+    for (i = 0; i < items.length; i++) {
+      var st = str(items[i] && items[i].status);
+      if (st === "running") r++;
+      else if (st === "queued") q++;
+    }
+    var ag = agentList(P);
+    var alloc = num(b.totalUsd, num(v.budgetTotalUsd, sumOver(budgetList(P), "allocatedUsd")));
+    var spent = num(b.spentUsd, num(v.budgetSpentUsd, sumOver(budgetList(P), "spentUsd")));
+    return {
+      departments: num(v.departments, asArray(P.departments).length),
+      projects: num(v.projects, asArray(P.projects).length),
+      agents: num(v.agents, ag.length),
+      tasks: num(v.tasks, countTasks(P)),
+      sessionsRunning: num(v.sessionsRunning, num(s.running, r)),
+      sessionsQueued: num(v.sessionsQueued, num(s.queued, q)),
+      sessionsTotal: num(v.sessionsTotal, num(s.total, items.length)),
+      budgetTotalUsd: alloc,
+      budgetSpentUsd: spent,
+      budgetRemainingUsd: num(b.remainingUsd, num(v.budgetRemainingUsd, Math.max(0, alloc - spent)))
+    };
+  }
+  function sumOver(arr, key) {
+    var n = 0;
+    for (var i = 0; i < arr.length; i++) if (arr[i]) n += num(arr[i][key], 0);
+    return n;
+  }
+
+  /* =====================================================================
+     HEADER
+     ===================================================================== */
+  function chip(label, value, tone) {
+    return '<span class="chip' + (tone ? " c-" + tone : "") + '"><b>' + esc(value) + "</b>" + esc(label) + "</span>";
+  }
+  function renderHeader() {
+    var P = S.panel || {};
+    var v = visualOf(P);
+    setText("companyName", str(P.company) || "Local AI Company");
+    var ceo = P.ceo || {};
+    setText("ceoLine", "CEO \u00b7 " + (str(ceo.name) || "\u2014"));
+
+    // "agents" counts the same population the Agent console lists (report F-09: visual.agents
+    // excludes the assistant, so the header and the console used to disagree, 32 vs 33).
+    var agentCount = agentList(P).length;
+    var chips = [
+      chip("running", v.sessionsRunning, v.sessionsRunning > 0 ? "ok" : ""),
+      chip("queued", v.sessionsQueued, v.sessionsQueued > 0 ? "warn" : ""),
+      chip("sessions total", v.sessionsTotal, ""),
+      chip("agents", agentCount, ""),
+      chip("tasks", v.tasks, "")
+    ];
+    // Real budget only (CEO order 2026-10-01): provider limits + measured spend.
+    // Before the feed arrives there is no chip, rather than an invented cap.
+    var hrb = realBudgetOf(P);
+    if (hrb) {
+      var hgo = hrb.providers.go, hds = hrb.providers.deepseek, hcl = hrb.providers.claude;
+      var hgoPct = typeof hgo.remainingPct === "number" ? hgo.remainingPct : null;
+      var hgoTone = hgoPct === null ? "warn" : hgoPct < 15 ? "err" : hgoPct < 40 ? "warn" : "ok";
+      chips.push(chip("Go " + str(hgo.bindingWindow || "quota") + " left (real)", hgoPct === null ? "not measured" : hgoPct + "%", hgoTone));
+      chips.push(chip("DeepSeek credit", typeof hds.balanceUsd === "number" ? money(hds.balanceUsd) : "not measured", hds.connected ? "" : "warn"));
+      var hclPct = typeof hcl.remainingPct === "number" ? hcl.remainingPct : null;
+      chips.push(chip("Claude " + str(hcl.bindingWindow || "window") + " left", hclPct === null ? "not measured" : hclPct + "%", ""));
+      chips.push(chip("spent today (measured)", money(hrb.spend && hrb.spend.todayUsd), ""));
+    } else {
+      chips.push(chip("measured spend", money(v.budgetSpentUsd), ""));
+    }
+    paint("chips", sigOf(v, P.company, agentCount), chips.join(""));
+
+    setText("lastUpd", S.lastUpdated ? "last updated " + hhmmss(new Date(S.lastUpdated)) : "last updated \u2014");
+  }
+
+  /* =====================================================================
+     1. SESSIONS BOARD
+     ===================================================================== */
+  function sessFilters() {
+    var q = elValue("sessFilter", S.q);
+    var st = elValue("sessStatus", S.statusFilter) || "all";
+    var only = elChecked("onlyRunning", S.onlyRunning);
+    S.q = q; S.statusFilter = st; S.onlyRunning = !!only;
+    return { q: oneLine(q).toLowerCase(), status: st, only: !!only };
+  }
+  function sessionMatches(x, f) {
+    var st = str(x.status) || "queued";
+    if (f.only && st !== "running") return false;
+    if (f.status !== "all" && st !== f.status) return false;
+    if (!f.q) return true;
+    var hay = [x.taskTitle, x.agentName, x.agentId, x.role, x.departmentName, x.projectName, x.model, x.id, x.taskId, x.lastText]
+      .map(function (s) { return str(s).toLowerCase(); }).join(" ");
+    return hay.indexOf(f.q) >= 0;
+  }
+  function sessionRow(x, budget) {
+    var st = str(x.status) || "queued";
+    var b = budget || null;
+    var usedPct = b ? num(b.pctUsed, 0) : 0;
+    var cost = typeof x.costUsd === "number" ? money(x.costUsd) : '<span class="muted">\u2014</span>';
+    var taskTitle = str(x.taskTitle) || "(no task title)";
+    var tip = oneLine(
+      (x.projectName ? str(x.projectName) + " \u00b7 " : "") + taskTitle +
+      (x.lastText ? " \u2014 " + str(x.lastText) : "")
+    );
+    return '<div class="srow s-' + cls(st) + (st === "running" ? " isrunning" : "") +
+      '" data-status="' + esc(st) + '" title="' + esc(trunc(tip, 400)) + '">' +
+      '<span class="c-st">' + pill(st) + "</span>" +
+      '<span class="c-dept">' + esc(str(x.departmentName) || "\u2014") + "</span>" +
+      '<span class="c-role">' + esc(str(x.role) || "\u2014") + "</span>" +
+      '<span class="c-agent">' + esc(str(x.agentName) || str(x.agentId) || "\u2014") +
+        "<em>" + esc(str(x.agentId)) + (x.runtime ? " \u00b7 " + esc(str(x.runtime)) : "") + "</em></span>" +
+      '<span class="c-task">' + (x.projectName ? '<i class="muted">' + esc(str(x.projectName)) + " \u00b7 </i>" : "") +
+        esc(trunc(taskTitle, 160)) + "</span>" +
+      '<span class="c-model">' + esc(str(x.model) || "\u2014") + "</span>" +
+      '<span class="c-elapsed" data-started="' + esc(str(x.startedAt)) + '" data-finished="' + esc(str(x.finishedAt)) + '">' +
+        esc(dur(x.startedAt, x.finishedAt)) + "</span>" +
+      '<span class="c-cost">' + cost + "</span>" +
+      '<span class="c-bar">' + (typeof x.costUsd === "number"
+        ? "<em>" + esc(money(x.costUsd)) + "</em>"
+        : '<em class="muted">not measured</em>') + "</span>" +
+      "</div>";
+  }
+  function renderSessions() {
+    var P = S.panel || {};
+    var s = P.sessions || {};
+    var items = asArray(s.items).slice().sort(function (a, b) { return tsms(b && b.startedAt) - tsms(a && a.startedAt); });
+    var f = sessFilters();
+    var visible = items.filter(function (x) { return sessionMatches(x || {}, f); });
+
+    var running = num(s.running, items.filter(function (x) { return str(x && x.status) === "running"; }).length);
+    var queued = num(s.queued, items.filter(function (x) { return str(x && x.status) === "queued"; }).length);
+    var total = num(s.total, items.length);
+
+    var badge = byId("runBadge");
+    if (badge) {
+      var label = running + " running";
+      if (badge.textContent !== label) badge.textContent = label;
+      badge.className = "bigbadge" + (running > 0 ? " live" : "");
+    }
+    setText("sessMeta", queued + " queued \u00b7 " + total + " total \u00b7 showing " + visible.length +
+      (items.length !== visible.length ? " of " + items.length : ""));
+
+    var html;
+    if (!Array.isArray(items) || !items.length) {
+      html = '<div class="empty">' +
+        (P.sessions ? "No sessions yet \u2014 nothing is running." :
+          "No session feed in this payload (the server may still be running older code).") +
+        "</div>";
+    } else if (!visible.length) {
+      html = '<div class="empty">No session matches the current filter.</div>';
+    } else {
+      var head = '<div class="sgrid shead">' +
+        "<span>status</span><span>department</span><span>role</span><span>agent</span><span>task</span>" +
+        "<span>model</span><span>elapsed</span><span>cost</span><span>measured spend</span></div>";
+      var rows = visible.map(function (x) { return sessionRow(x || {}, sessionCap(P, x)); }).join("");
+      html = '<div class="sess">' + head + rows + "</div>";
+    }
+    paint("sessionsBody", sigOf(visible.map(function (x) {
+      return [x && x.id, x && x.status, x && x.agentId, x && x.taskTitle, x && x.costUsd, x && x.startedAt, x && x.finishedAt, x && x.model, x && x.runtime];
+    }), f, running, queued, total, !!P.sessions), html);
+  }
+
+  /* =====================================================================
+     2. BUDGET (real numbers; CEO order 2026-10-01)
+
+     Provider limits (OpenCode Go windows, DeepSeek balance + phase, Claude
+     subscription status) and measured spend are read from the panel payload's
+     `realBudget` block (src/company/budgetReal.ts, the same JSON that
+     GET /company/budget/real returns, so the page and the API cannot disagree).
+     Per-agent numbers are a READ-ONLY "spent so far" record: there are no
+     quotas and no "Set" control any more. Anything unmeasured prints
+     "not measured" rather than a number.
+     ===================================================================== */
+  function sparklineHtml(items) {
+    var withCost = asArray(items).filter(function (x) { return x && typeof x.costUsd === "number"; });
+    if (withCost.length < 2) return "";
+    withCost.sort(function (a, b) { return tsms(a.startedAt) - tsms(b.startedAt); });
+    var cum = 0, ys = withCost.map(function (p) { cum += num(p.costUsd, 0); return cum; });
+    var max = Math.max.apply(null, ys) || 1;
+    var step = 100 / (ys.length - 1);
+    var poly = ys.map(function (y, i) {
+      return (i * step).toFixed(2) + "," + (22 - (y / max) * 20).toFixed(2);
+    }).join(" ");
+    return '<div class="spark"><svg viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">' +
+      '<polyline points="' + poly + '" fill="none" stroke="var(--accent)" stroke-width="1" vector-effect="non-scaling-stroke"/></svg>' +
+      '<span class="muted tiny">cumulative session spend by start time \u00b7 peak ' + esc(money(max)) + "</span></div>";
+  }
+  function realBudgetOf(P) {
+    P = P || {};
+    if (P.realBudget && P.realBudget.providers) return P.realBudget;
+    if (S.realBudget && S.realBudget.providers) return S.realBudget;
+    return null;
+  }
+  // Amounts: money() is kept for the rest of the page; this variant says
+  // "not measured" instead of "$0.00" for a null (the real-budget rule).
+  function rbAmount(v) {
+    if (typeof v !== "number" || !isFinite(v)) return "not measured";
+    var a = Math.abs(v);
+    return "$" + (a !== 0 && a < 1 ? v.toFixed(6) : v.toFixed(2));
+  }
+  function rbProviderCard(p) {
+    var meta = str(p.kind) + " \u00b7 " + str(p.source) + (p.stale ? " \u00b7 stale (last good reading)" : "");
+    var body;
+    if (!p.connected) {
+      body = '<div class="muted tiny">not measured \u2014 ' + esc(oneLine(p.notMeasured || p.detail)) + "</div>";
+    } else if (str(p.id) === "deepseek-direct") {
+      body = '<div><b>' + esc(rbAmount(p.balanceUsd)) + "</b> <span class=\"muted tiny\">" +
+        esc(str(p.currency) || "credit") + " credit \u00b7 " + esc(str(p.phaseLine) || "phase not measured") +
+        " \u00b7 " + (p.armed ? "direct routing armed" : "direct routing off") + "</span></div>";
+    } else {
+      var ws = asArray(p.windows);
+      body = ws.length ? ws.map(function (w) {
+        var left = typeof w.remainingPct === "number" ? w.remainingPct + "% left" : "not measured";
+        var bits = [left];
+        if (w.resetsIn) bits.push("resets in " + str(w.resetsIn));
+        return '<div class="row" style="justify-content:space-between;gap:8px"><span>' + esc(str(w.window)) + "</span>" +
+          '<span class="muted tiny">' + esc(bits.join(" \u00b7 ")) + "</span></div>";
+      }).join("") + (p.noDollarBudget ? '<div class="muted tiny">subscription, no dollar budget</div>' : "")
+        : '<div class="muted tiny">connected, but no quota window was reported</div>';
+    }
+    return '<div class="rcard"><div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap">' +
+      "<b>" + esc(str(p.label)) + "</b><span class=\"muted tiny\">" + esc(meta) + "</span></div>" + body + "</div>";
+  }
+  function rbBucketCards(rows, label) {
+    var list = asArray(rows);
+    if (!list.length) return '<div class="muted tiny">no ' + esc(label) + " recorded</div>";
+    return '<div class="rollup" style="padding:0;border:0">' + list.map(function (r) {
+      return '<div class="rcard"><div class="rn">' + esc(str(r.key)) + '</div><div class="rr">' +
+        esc(String(num(r.calls, 0))) + " calls \u00b7 " + esc(rbAmount(r.costUsd)) + "</div></div>";
+    }).join("") + "</div>";
+  }
+  function rbAgentRow(a) {
+    var id = str(a.agentId);
+    return '<div class="rbrow" data-agent="' + esc(id) + '" title="' + esc(str(a.name) + " \u00b7 " + str(a.projectName) + " (" + id + ")") + '">' +
+      '<span class="b-name">' + esc(str(a.name) || id) + "<em>" + esc(id) + "</em></span>" +
+      '<span class="c-role">' + esc(str(a.role) || "\u2014") + "</span>" +
+      '<span class="c-dept">' + esc(str(a.departmentName) || "\u2014") + "</span>" +
+      '<span class="num">' + esc(rbAmount(a.spentUsd)) + "</span>" +
+      '<span class="num">' + esc(rbAmount(a.spentTodayUsd)) + "</span>" +
+      '<span class="num">' + esc(num(a.sharePct, 0).toFixed(1)) + "%</span>" +
+      '<span class="num muted">no quota</span>' +
+      "</div>";
+  }
+  function rbSpendMeter(sp) {
+    var bp = sp.byProvider || {};
+    return '<div class="meter"><div class="meterhead"><span class="lbl">measured spend today</span><b>' + esc(rbAmount(sp.todayUsd)) + "</b>" +
+      '<span class="muted">last 7 days ' + esc(rbAmount(sp.last7dUsd)) + " \u00b7 all recorded " + esc(rbAmount(sp.allTimeUsd)) +
+      " \u00b7 DeepSeek direct " + esc(rbAmount(bp.deepseekDirectUsd)) + " (shown separately from Go)" +
+      " \u00b7 Go/other " + esc(rbAmount(bp.opencodeGoUsd)) + " \u00b7 Claude " + esc(rbAmount(bp.claudeUsd)) + "</span></div>" +
+      sparklineHtml((S.panel || {}).sessions ? ((S.panel || {}).sessions || {}).items : []) + "</div>";
+  }
+  function renderBudgets() {
+    var P = S.panel || {};
+    var rb = realBudgetOf(P);
+    if (!rb) {
+      setText("budMeta", "waiting for the real budget feed");
+      paint("budgetsBody", sigOf("no-real-budget"), '<div class="empty">The real budget numbers have not arrived yet (the server reads them from the provider and caches them for 30-60 s). Nothing is shown rather than an invented number.</div>');
+      return;
+    }
+    var provs = [rb.providers.go, rb.providers.deepseek, rb.providers.claude];
+    var spend = rb.spend || {};
+    var agents = asArray(rb.agents);
+    setText("budMeta", "real numbers \u00b7 " + agents.length + " agents \u00b7 provider limits + measured spend");
+
+    var h = "";
+    if (S.flash) h += '<div class="box info">' + esc(S.flash) + "</div>";
+    h += '<div class="lbl" style="padding:8px 13px 0">Provider limits</div>';
+    h += '<div class="rollup">' + provs.map(rbProviderCard).join("") + "</div>";
+    if (asArray(rb.notMeasured).length) {
+      h += '<div class="muted tiny" style="padding:6px 13px">Not measured right now: ' +
+        esc(asArray(rb.notMeasured).map(oneLine).join(" | ")) + "</div>";
+    }
+
+    h += '<div class="lbl" style="padding:10px 13px 0">Spend (measured)</div>';
+    h += rbSpendMeter(spend);
+    h += '<div style="padding:9px 13px"><div class="grid2">' +
+      "<div>" + rbBucketCards(spend.byDepartment, "department") + "</div>" +
+      "<div>" + rbBucketCards(spend.byModel, "model") + "</div>" +
+      "</div>" +
+      '<div class="muted tiny" style="margin-top:6px">' + esc(oneLine(spend.note)) + "</div></div>";
+
+    h += '<div class="lbl" style="padding:10px 13px 0">Spent so far (read-only \u2014 no quotas)</div>';
+    if (!agents.length) {
+      h += '<div class="empty">no agent spend recorded yet</div>';
+    } else {
+      h += '<div class="bwrap"><div class="btable" style="min-width:820px">' +
+        '<div class="rbrow bhead"><span>agent</span><span>role</span><span>department</span>' +
+        '<span class="num">spent so far</span><span class="num">spent today</span><span class="num">share of total</span>' +
+        '<span class="num">quota</span></div>' +
+        agents.map(rbAgentRow).join("") +
+        "</div></div>";
+    }
+    paint("budgetsBody", sigOf(agents.map(function (a) { return [a.agentId, a.spentUsd, a.spentTodayUsd]; }),
+      spend.todayUsd, spend.last7dUsd,
+      provs.map(function (p) { return [p.id, p.connected, p.stale, p.remainingPct, p.balanceUsd]; }), S.flash), h);
+  }
+
+  /* =====================================================================
+     3. ASSISTANT CONSOLE
+     ===================================================================== */
+  function assistantMessages() {
+    if (S.assistantThread && S.assistantThread.length) return S.assistantThread;
+    var a = (S.panel || {}).assistant;
+    return asArray(a && a.thread);
+  }
+  function dispatchLogHtml(r) {
+    var h = '<div class="log">';
+    h += '<div class="mh"><span class="who">dispatch \u2192 assistant</span><span class="muted tiny">' + esc(fmtTs(r.ts)) + "</span></div>";
+    if (r.text) h += '<div class="mtext dim">\u25b8 ' + esc(trunc(oneLine(r.text), 240)) + "</div>";
+    if (r.error) h += '<div class="box err">error: ' + esc(str(r.error)) + "</div>";
+    if (r.reply) h += '<div class="mtext">' + esc(str(r.reply)) + "</div>";
+    var dec = asArray(r.decisions);
+    if (dec.length) h += '<ul class="dec">' + dec.map(function (d) { return "<li>" + esc(str(d)) + "</li>"; }).join("") + "</ul>";
+    var plan = asArray(r.plan);
+    if (plan.length) {
+      h += '<div class="disp"><span class="lbl">plan</span>' + plan.map(function (p) {
+        return '<span class="tag">' + esc(str(p && p.title)) + " <i>" + esc(str(p && p.departmentName)) + "/" + esc(str(p && p.role)) + "</i></span>";
+      }).join("") + "</div>";
+    }
+    var disp = asArray(r.dispatched);
+    if (disp.length) {
+      h += '<div class="disp"><span class="lbl">dispatched</span>' + disp.map(function (d) {
+        return '<a class="tag link" role="button" tabindex="0" data-act="goto-task" data-project="' + esc(str(d && d.projectId)) +
+          '" data-task="' + esc(str(d && d.taskId)) + '">' + esc(str(d && d.taskId)) + " \u00b7 " +
+          esc(trunc(str(d && d.title), 70)) + " " + pill(str(d && d.status) || "queued") + "</a>";
+      }).join("") + "</div>";
+    }
+    var sess = asArray(r.sessions);
+    if (sess.length) {
+      h += '<div class="disp"><span class="lbl">sessions</span>' + sess.map(function (s) {
+        return '<span class="tag">' + esc(str(s && s.id)) + " " + pill(str(s && s.status) || "queued") + "</span>";
+      }).join("") + "</div>";
+    }
+    h += "</div>";
+    return h;
+  }
+  function renderAssistant() {
+    var P = S.panel || {};
+    var a = P.assistant || {};
+    var budget = a.budget || budgetOf(P, str(a.agentId) || "assistant");
+    setText("assStatus", str(a.status) || "idle");
+    var sp = byId("assStatus");
+    if (sp) sp.className = "pill p-" + cls(str(a.status) || "idle");
+
+    var msgs = assistantMessages();
+    var h = "";
+    h += '<div class="body">';
+    h += '<div class="ahdr"><span class="muted small">' + esc(str(a.name) || "CEO assistant") + "</span>" +
+      (budget ? '<span class="muted tiny">measured spend so far ' + esc(money(budget.spentUsd)) + " \u00b7 no quota</span>"
+        : '<span class="muted tiny">no spend recorded yet</span>') +
+      "</div>";
+
+    h += '<div class="athread" data-scrollkey="assthread">';
+    if (S.assistantThreadErr) h += '<div class="box err">thread unavailable: ' + esc(S.assistantThreadErr) + "</div>";
+    if (!msgs.length) h += '<div class="empty">No assistant chat yet \u2014 tell it what you want built.</div>';
+    else h += msgs.slice(-120).map(function (m) {
+      var isCeo = str(m && m.role).toLowerCase() === "ceo";
+      return '<div class="msg ' + (isCeo ? "m-ceo" : "m-agent") + '">' +
+        '<div class="mh"><span class="who">' + (isCeo ? "CEO" : "assistant") + "</span>" +
+        '<span class="muted tiny">' + esc(fmtTs(m && m.ts)) + "</span>" +
+        (asArray(m && m.tasks).length ? asArray(m.tasks).map(function (t) { return '<span class="tag">' + esc(str(t)) + "</span>"; }).join("") : "") +
+        '</div><div class="mtext">' + esc(str(m && m.text)) + "</div></div>";
+    }).join("");
+    h += "</div>";
+
+    if (S.assistantLog.length) {
+      h += '<div class="lbl" style="margin:4px 0 6px">dispatch results</div>' + S.assistantLog.map(dispatchLogHtml).join("");
+    }
+
+    h += '<div class="composer"><textarea id="assInput" class="in ta" rows="2" placeholder="Ask the assistant to dispatch work&hellip;"></textarea>' +
+      '<div class="crow"><button class="btn primary" data-act="ass-send"' + (S.assistantBusy ? " disabled" : "") + ">" +
+      (S.assistantBusy ? "dispatching\u2026" : "Send to assistant") + "</button>" +
+      '<span class="muted tiny">POST /company/assistant/message \u00b7 autoRun = ' + (elChecked("autoRun", true) ? "on" : "off") +
+      " \u00b7 Enter sends</span></div></div>";
+    h += "</div>";
+
+    paint("assistantBody", sigOf(msgs.map(function (m) { return [m && m.ts, m && m.role, str(m && m.text).length]; }),
+      S.assistantLog.map(function (r) { return [r.ts, r.error || "", asArray(r.dispatched).length, asArray(r.decisions).length]; }),
+      S.assistantBusy, S.assistantThreadErr, budget ? [budget.spentUsd] : null,
+      str(a.status), str(a.name)), h);
+  }
+  function sendAssistant() {
+    var ta = byId("assInput");
+    var text = ta ? str(ta.value).trim() : draftOf("assInput").trim();
+    if (!text) return;
+    S.drafts.assInput = "";
+    if (ta) ta.value = "";
+    var autoRun = elChecked("autoRun", true);
+    S.assistantBusy = true;
+    S.flash = "";
+    render();
+    api("/company/assistant/message", { method: "POST", body: { text: text, autoRun: autoRun } })
+      .then(function (r) {
+        var rec = (r && typeof r === "object") ? r : { reply: str(r) };
+        rec.ts = nowIso();
+        rec.text = text;
+        S.assistantLog.unshift(rec);
+        if (S.assistantLog.length > 10) S.assistantLog.length = 10;
+        S.assistantThread = (S.assistantThread || assistantMessages()).concat([{ ts: rec.ts, role: "ceo", text: text }]);
+        return fetchAssistantThread(true);
+      })
+      .catch(function (e) {
+        S.assistantLog.unshift({
+          ts: nowIso(), text: text,
+          error: errText(e)
+        });
+        if (S.assistantLog.length > 10) S.assistantLog.length = 10;
+      })
+      .then(function () {
+        S.assistantBusy = false;
+        render();
+        pollNow();
+      });
+  }
+
+  /* =====================================================================
+     4. AGENT CONSOLE
+     ===================================================================== */
+  function sendStateHtml(s) {
+    if (!s) return "";
+    if (s.state === "sending") return '<div class="box info">sending\u2026</div>';
+    if (s.state === "queued_error") {
+      return '<div class="box err"><b>run failed</b> \u2014 the server answered <code>status: "queued"</code> together with an error, ' +
+        'so this message was <b>not</b> queued: the run failed (report F-07).' +
+        (s.sessionId ? ' <span class="muted tiny">session ' + esc(s.sessionId) + "</span>" : "") +
+        '<div class="mtext">' + esc(str(s.error)) + "</div></div>";
+    }
+    if (s.state === "queued") {
+      return '<div class="box warn"><b>queued</b> \u2014 the agent is busy, your message waits for the current session to finish.' +
+        (s.sessionId ? ' <span class="muted tiny">session ' + esc(s.sessionId) + "</span>" : "") + "</div>";
+    }
+    if (s.state === "error") return '<div class="box err">send failed: ' + esc(str(s.error)) + "</div>";
+    if (s.state === "replied") {
+      return '<div class="box ok"><div class="mh"><span class="who">' + esc(str(s.name) || "reply") + "</span>" +
+        '<span class="muted tiny">' + esc(fmtTs(s.ts)) + "</span></div>" +
+        '<div class="mtext">' + esc(str(s.reply) || "(empty reply)") + "</div></div>";
+    }
+    return "";
+  }
+  function msgList(msgs) {
+    var arr = asArray(msgs).slice(-90);
+    if (!arr.length) return '<div class="empty">no messages yet</div>';
+    return arr.map(function (m) {
+      var from = str(m && (m.from || m.role)) || "agent";
+      var isCeo = /ceo/i.test(from);
+      return '<div class="msg ' + (isCeo ? "m-ceo" : "m-agent") + '">' +
+        '<div class="mh"><span class="who">' + esc(isCeo ? "CEO" : from) + "</span>" +
+        (m && m.kind ? '<span class="tag">' + esc(str(m.kind)) + "</span>" : "") +
+        '<span class="muted tiny">' + esc(fmtTs(m && m.ts)) + "</span></div>" +
+        '<div class="mtext">' + esc(str(m && m.text)) + "</div></div>";
+    }).join("");
+  }
+  function agentDetailHtml(P, a) {
+    var id = str(a.agentId);
+    var key = keyOf(a);
+    var b = a.budget || budgetOf(P, key) || budgetOf(P, id);
+    var th = S.threadById[key] || null;
+    var send = S.agentSend[key] || null;
+
+    var h = "";
+    h += '<div class="dmeta">' +
+      kv("role", str(a.roleName || a.role)) +
+      kv("department", str(a.departmentName)) +
+      kv("project", str(a.projectName)) +
+      kv("model", str(a.modelId)) +
+      kv("state", a.running ? "running" : (str(a.status) || "idle")) +
+      kv("thread", num(a.threadDepth, 0) + " msgs") +
+      kv("calling as", key) +
+      "</div>";
+    h += "<div>" + agentDot(a) + ' <b>' + esc(str(a.name) || id) + "</b> <span class=\"muted tiny\">" + esc(key) + "</span>" +
+      (a.running ? ' <span class="pill p-running">live session</span>' : "") + "</div>";
+
+    if (b) {
+      h += '<div class="dblock"><div class="bl">spent so far (measured, read-only \u2014 no quota): ' + esc(money(b.spentUsd)) +
+        " \u00b7 " + esc(num(b.sessionsRun, 0)) + " sessions \u00b7 tier " + esc(str(b.tier) || "\u2014") + " " + pill(str(b.status) || "idle") + "</div></div>";
+    } else {
+      h += '<div class="dblock muted">no spend record for this agent</div>';
+    }
+    if (a.lastMessage) {
+      h += '<div class="dblock"><div class="bl">last message</div><div class="mtext dim">' + esc(trunc(oneLine(a.lastMessage), 500)) + "</div></div>";
+    }
+    h += sendStateHtml(send);
+    h += '<div class="composer"><textarea id="agentInput" class="in ta" rows="3" placeholder="message ' +
+      esc(str(a.name) || id) + ' as CEO\u2026"></textarea>' +
+      '<div class="crow"><button class="btn primary" data-act="agent-send">Send message</button>' +
+      '<span class="muted tiny">idle \u2192 runs now; busy \u2192 queued</span></div></div>';
+
+    h += '<div class="threadbox" data-scrollkey="agentThread">' +
+      (th ? (th.err ? '<div class="box err">thread unavailable: ' + esc(th.err) + "</div>" + msgList(th.messages) : msgList(th.messages))
+        : '<div class="empty">thread not loaded yet</div>') + "</div>";
+    return h;
+  }
+  function renderAgents() {
+    var P = S.panel || {};
+    var list = agentList(P);
+    // Address agents by the composite key (agentKey), not the bare id: five "manager" rows exist
+    // and a bare id always resolves to the first one (report F-13).
+    if (!S.selectedAgent && list.length) S.selectedAgent = keyOf(list[0]);
+    var selected = null, i;
+    for (i = 0; i < list.length; i++) if (keyOf(list[i]) === str(S.selectedAgent)) selected = list[i];
+
+    var groups = {};
+    var order = [];
+    for (i = 0; i < list.length; i++) {
+      var a = list[i] || {};
+      var k = str(a.departmentName) || str(a.departmentId) || "Unassigned";
+      if (!groups[k]) { groups[k] = []; order.push(k); }
+      groups[k].push(a);
+    }
+
+    var h = '<div class="console"><div class="alist" data-scrollkey="alist">';
+    if (!list.length) h += '<div class="empty">no agents in this payload</div>';
+    order.forEach(function (dept) {
+      h += '<div class="agroup">' + esc(dept) + ' <span class="muted tiny">' + groups[dept].length + "</span></div>";
+      groups[dept].forEach(function (a) {
+        var key = keyOf(a);
+        var sel = key === str(S.selectedAgent);
+        h += '<button class="arow' + (sel ? " active" : "") + '" data-act="select-agent" data-agent="' + esc(key) +
+          '" title="' + esc(key) + '">' +
+          agentDot(a) + '<span class="aname">' + esc(str(a.name) || str(a.agentId)) + "</span>" +
+          '<span class="arole">' + esc(str(a.roleName || a.role) || "\u2014") +
+          (a.projectName ? " <i>" + esc(trunc(str(a.projectName), 20)) + "</i>" : "") + "</span>" +
+          (a.running ? '<span class="live">live</span>' : "") + "</button>";
+      });
+    });
+    h += '</div><div class="adetail" data-scrollkey="adetail">';
+    h += selected ? agentDetailHtml(P, selected) : '<div class="empty">select an agent</div>';
+    h += "</div></div>";
+
+    var id2 = selected ? keyOf(selected) : "";
+    var th2 = S.threadById[id2] || null;
+    paint("agentsBody", sigOf(id2, list.map(function (x) { return [keyOf(x), x.status, x.running, x.name, x.role, x.departmentName, x.threadDepth]; }),
+      th2 ? [id2, asArray(th2.messages).length, th2.err, tsms((asArray(th2.messages).slice(-1)[0] || {}).ts)] : null,
+      S.agentSend[id2] ? [S.agentSend[id2].state, S.agentSend[id2].ts, str(S.agentSend[id2].reply).length, str(S.agentSend[id2].error)] : null), h);
+  }
+  function sendAgent(force) {
+    var id = S.selectedAgent;
+    if (!id) return;
+    var prev = S.agentSend[id] || {};
+    var text;
+    var ta = byId("agentInput");
+    text = ta ? str(ta.value).trim() : draftOf("agentInput").trim();
+    if (!text) return;
+    S.drafts.agentInput = "";
+    if (ta) ta.value = "";
+    var run = elChecked("execNow", true);
+    var name = "";
+    var list = agentList(S.panel || {});
+    for (var i = 0; i < list.length; i++) if (keyOf(list[i]) === id) name = str(list[i].name);
+    S.agentSend[id] = { state: "sending", text: text, ts: nowIso(), name: name };
+    S.flash = "";
+    render();
+
+    var body = { text: text, run: run };
+    if (force) body.force = true;
+    api("/company/agents/" + enc(id) + "/message", { method: "POST", body: body })
+      .then(function (r) {
+        var status = str(r && r.status) || "replied";
+        var rerr = str(r && r.error);
+        // F-07: a failed run can come back as HTTP 200 + status "queued" WITH an error string.
+        // Never explain that as "the agent is busy".
+        S.agentSend[id] = {
+          state: rerr ? "queued_error" : (status === "queued" ? "queued" : "replied"),
+          text: text, name: name, ts: nowIso(),
+          reply: str(r && r.reply), sessionId: str(r && r.sessionId), error: rerr
+        };
+        // optimistic thread append (server thread is authoritative on next fetch)
+        var th = S.threadById[id] || (S.threadById[id] = { messages: [], err: "", at: "" });
+        th.messages = asArray(th.messages).concat([
+          { ts: S.agentSend[id].ts, from: "ceo", text: text },
+          { ts: S.agentSend[id].ts, from: id, text: rerr || str(r && r.reply) || "(queued \u2014 reply arrives when the session finishes)" }
+        ]);
+        return fetchAgentThread(id, true);
+      })
+      .catch(function (e) {
+        S.agentSend[id] = { state: "error", text: text, name: name, ts: nowIso(), error: errText(e) };
+      })
+      .then(function () { render(); pollNow(); });
+  }
+  /* Per-agent quota controls are GONE (CEO order 2026-10-01): no caps to set,
+     so there is no setBudget/applyBudgetUpdate any more. */
+
+  /* =====================================================================
+     5. GATES + TASK BOARD
+     ===================================================================== */
+  var GATE_PATH = { intake: "approve-intake", code: "approve-code", merge: "approve-merge" };
+  function gateLabel(g) { return str(g); }
+  function renderGates() {
+    var P = S.panel || {};
+    var gates = asArray(P.gates).filter(function (g) { return g && g.awaiting; });
+    setText("gateMeta", gates.length + " awaiting approval");
+
+    var h = "";
+    h += '<div class="gwall">';
+    if (S.flash) h += '<div class="box info">' + esc(S.flash) + "</div>";
+    if (!gates.length) {
+      h += '<div class="empty">' + (P.gates ? "No gates awaiting approval." : "No gate feed in this payload.") + "</div>";
+    } else {
+      h += gates.map(function (g) {
+        var gate = cls(g.awaiting);
+        var path = GATE_PATH[gate] ? gate : null;
+        var busy = S.gateBusy === (str(g.projectId) + str(g.taskId) + gate);
+        return '<div class="grow2 awaiting">' +
+          "<span>" + pill(gate, "awaiting " + str(g.awaiting)) + "</span>" +
+          '<span class="tag">' + esc(str(g.taskId)) + "</span>" +
+          '<span class="tag">' + esc(trunc(str(g.request), 90)) + "</span>" +
+          '<span class="muted tiny">' + esc(str(g.projectName) || str(g.projectId)) + "</span>" +
+          '<div class="grow"></div>' +
+          (path
+            ? '<button class="btn approve" data-act="approve" data-project="' + esc(str(g.projectId)) +
+              '" data-task="' + esc(str(g.taskId)) + '" data-gate="' + esc(gate) + '"' + (busy ? " disabled" : "") + ">" +
+              (busy ? "\u2026" : "\u2713 approve " + esc(gate)) + "</button>"
+            : '<span class="muted tiny">unknown gate</span>') +
+          "</div>";
+      }).join("");
+    }
+    h += "</div>";
+
+    var projects = asArray(P.projects);
+    if (!projects.length) {
+      h += '<div class="empty">no projects in this payload</div>';
+    } else {
+      h += projects.map(function (p) {
+        var tasks = asArray(p && p.tasks).slice().reverse();
+        var thread = asArray(p && p.thread).slice(-3);
+        return '<div class="projboard"><h3>' + esc(str(p && p.name)) + " " + pill(str(p && p.status) || "active") +
+          ' <span class="muted tiny">' + esc(str(p && p.id)) + " \u00b7 " + tasks.length + " tasks" +
+          (p && p.running ? " \u00b7 running" : "") + "</span></h3>" +
+          (tasks.length
+            ? '<div class="tbrow tbhead"><span>task</span><span>request</span><span>status</span><span>gates / updated</span></div>' +
+              tasks.map(function (t) {
+                var id = str(p.id) + "-" + str(t && t.id);
+                var gatesTxt = ["intake", "code", "merge"].filter(function (k) { return t && t.gates && t.gates[k]; }).join(",") || "\u2014";
+                return '<div class="tbrow" id="task-' + esc(id) + '"><span class="tag">' + esc(str(t && t.id)) + "</span>" +
+                  '<span class="g-req" title="' + esc(oneLine(t && t.rawRequest)) + '">' + esc(trunc(oneLine(t && t.rawRequest), 90)) + "</span>" +
+                  "<span>" + pill(str(t && t.status)) + "</span>" +
+                  '<span class="muted tiny">' + esc(gatesTxt) + " \u00b7 " + esc(fmtTs(t && t.updatedAt)) + "</span></div>";
+              }).join("")
+            : '<div class="muted tiny">no tasks</div>') +
+          (thread.length
+            ? '<div class="tlines">' + thread.map(function (m) {
+                return '<div class="tline"><b>' + esc(str(m && m.agent)) + "</b> " +
+                  esc(trunc(oneLine(m && m.text), 130)) + "</div>";
+              }).join("") + "</div>"
+            : "") +
+          "</div>";
+      }).join("");
+    }
+    paint("gatesBody", sigOf(gates.map(function (g) { return [g.projectId, g.taskId, g.awaiting, g.request]; }),
+      projects.map(function (p) { return [p && p.id, p && p.status, asArray(p && p.tasks).length, tsms((asArray(p && p.tasks).slice(-1)[0] || {}).updatedAt)]; }),
+      S.flash, S.gateBusy), h);
+  }
+  function approve(projectId, taskId, gate) {
+    if (!projectId || !taskId || !GATE_PATH[gate]) return;
+    S.gateBusy = str(projectId) + str(taskId) + gate;
+    render();
+    api("/company/projects/" + enc(projectId) + "/tasks/" + enc(taskId) + "/" + GATE_PATH[gate], { method: "POST", body: {} })
+      .then(function () { S.flash = "Approved " + gate + " for task " + taskId + " (" + projectId + ")"; })
+      .catch(function (e) { S.flash = "Approve " + gate + " for " + taskId + " failed: " + errText(e); })
+      .then(function () { S.gateBusy = ""; render(); pollNow(); });
+  }
+  function gotoTasks(projectId, taskId) {
+    var el = byId("task-" + str(projectId) + "-" + str(taskId));
+    if (el) {
+      if (el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.className = el.className.replace(" flash", "") + " flash";
+    } else {
+      S.flash = "Task " + str(taskId) + " is not on the board yet (project " + str(projectId) + ")";
+      render();
+    }
+  }
+
+  /* =====================================================================
+     6. ORG VIEW
+     ===================================================================== */
+  function renderOrg() {
+    var P = S.panel || {};
+    var projects = asArray(P.projects);
+    var depts = asArray(P.departments);
+    if (!depts.length && projects.length) {
+      var seen = {}, order = [];
+      projects.forEach(function (p) {
+        var k = str(p && p.departmentId) || "unassigned";
+        if (!seen[k]) { seen[k] = true; order.push(k); }
+      });
+      depts = order.map(function (k) { return { id: k, name: k, projectIds: projects.filter(function (p) { return str(p.departmentId) === k; }).map(function (p) { return p.id; }) }; });
+    }
+    var agentCount = agentList(P).length;
+    setText("orgMeta", depts.length + " departments \u00b7 " + projects.length + " projects \u00b7 " + agentCount + " agents");
+
+    var h = '<div class="org">';
+    if (!depts.length) {
+      h += '<div class="empty">' + (P.departments || P.projects ? "No departments or projects yet." : "No org data in this payload.") + "</div>";
+    } else {
+      h += depts.map(function (d) {
+        var did = str(d && (d.id || d.name));
+        var open = S.orgOpen[did] !== false;
+        var deptProjects = asArray(d && d.projects);
+        if (!deptProjects.length) {
+          deptProjects = projects.filter(function (p) { return str(p && p.departmentId) === str(d && d.id); });
+        }
+        var teamsCount = deptProjects.reduce(function (n, p) { return n + asArray(p && p.teams).length; }, 0);
+        var agentsCount = deptProjects.reduce(function (n, p) {
+          return n + asArray(p && p.teams).reduce(function (m, t) { return m + asArray(t && t.agents).length; }, 0);
+        }, 0);
+        var db = d && d.budget;
+        var out = '<div class="odept">' +
+          '<button class="ohead" data-act="toggle-dept" data-dept="' + esc(did) + '">' +
+          (open ? "\u25be" : "\u25b8") + " <b>" + esc(str(d && d.name) || did) + "</b>" +
+          '<span class="muted tiny">' + deptProjects.length + " projects \u00b7 " + teamsCount + " teams \u00b7 " + agentsCount + " agents" +
+          (db ? " \u00b7 measured spend " + esc(money(db.spentUsd)) : "") +
+          (d && num(d.running, 0) > 0 ? ' \u00b7 <span class="live">' + num(d.running, 0) + " running</span>" : "") +
+          "</span></button>";
+        if (!open) return out + "</div>";
+        out += '<div class="obody">';
+        if (!deptProjects.length) out += '<div class="muted tiny">no projects</div>';
+        out += deptProjects.map(function (p) {
+          var teams = asArray(p && p.teams);
+          return '<div class="oprog"><div class="ph">' + pill(str(p && p.status) || "active") + "<b>" + esc(str(p && p.name)) + "</b>" +
+            '<span class="muted tiny">' + esc(str(p && p.id)) + "</span>" +
+            '<span class="muted tiny">' + asArray(p && p.tasks).length + " tasks</span>" +
+            "</div>" +
+            (teams.length ? teams.map(function (t) {
+              var agents = asArray(t && t.agents);
+              return '<div class="oteam">' + esc(str(t && t.name) || "team") + "</div>" +
+                '<div class="oagents">' + (agents.length ? agents.map(function (a) {
+                  var id = str(a && a.id);
+                  var info = null, list = agentList(P), i;
+                  for (i = 0; i < list.length; i++) if (str(list[i] && list[i].agentId) === id) info = list[i];
+                  var b = (info && info.budget) || budgetOf(P, id) || a.budget || null;
+                  return '<span class="oagent" data-act="select-agent" data-agent="' + esc(id) + '">' +
+                    agentDot({ status: (b && str(b.status)) || "idle", running: b && str(b.status) === "running", budget: b }) +
+                    "<span>" + esc(str(a && a.name) || id) + '</span><span class="muted tiny">' + esc(str(a && a.role)) + "</span>" +
+                    (b ? '<span class="pct">' + esc(money(b.spentUsd)) + " spent</span>" : "") +
+                    "</span>";
+                }).join("") : '<span class="muted tiny">no agents</span>') + "</div>";
+            }).join("") : '<div class="muted tiny">no teams</div>') +
+            "</div>";
+        }).join("");
+        out += "</div></div>";
+        return out;
+      }).join("");
+    }
+    h += "</div>";
+    paint("orgBody", sigOf(depts.map(function (d) { return [d && d.id, d && d.name, asArray(d && d.projects).length, S.orgOpen[str(d && (d.id || d.name))]]; }),
+      projects.map(function (p) { return [p && p.id, p && p.status, asArray(p && p.teams).length]; }), agentCount), h);
+  }
+
+  /* =====================================================================
+     RENDER / POLL LOOP
+     ===================================================================== */
+  function render() {
+    var root = typeof document !== "undefined" ? document.body : null;
+    if (root && root.setAttribute) root.setAttribute("data-online", S.online ? "1" : "0");
+    renderHeader();
+    renderSessions();
+    renderBudgets();
+    renderAssistant();
+    renderAgents();
+    renderGates();
+    renderOrg();
+    tickClocks();
+  }
+
+  function setBanner(mode, msg) {
+    var b = byId("banner");
+    if (!b) return;
+    if (!mode) { b.style.display = "none"; b.className = "banner"; setText("bannerText", ""); return; }
+    b.style.display = "flex";
+    b.className = "banner" + (mode === "stale" ? " stale" : "");
+    setText("bannerText", msg);
+  }
+
+  // PERF-PANEL: a hung router used to wedge this loop for good - the in-flight
+  // guard waits on a promise that never settles, so no poll ever ran again and
+  // the page went quiet. The panel request now has its own deadline; a stalled
+  // router shows up as the stale banner (and the next tick retries normally).
+  var PANEL_TIMEOUT_MS = 20000;
+
+  function pollNow(force) {
+    if (!force && (S.paused || (typeof document !== "undefined" && document.hidden))) return Promise.resolve();
+    if (S.inFlight) return S.inFlight;
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timedOut = false;
+    var deadline = ctrl ? setTimeout(function () { timedOut = true; ctrl.abort(); }, PANEL_TIMEOUT_MS) : null;
+    var settled = function () { if (deadline) { clearTimeout(deadline); deadline = null; } };
+    S.inFlight = api("/company/panel", ctrl ? { signal: ctrl.signal } : {})
+      .then(function (p) {
+        settled();
+        S.panel = p;
+        S._bidx = null;
+        S.online = true;
+        S.lastError = "";
+        S.lastUpdated = Date.now();
+        setBanner(null);
+        render();
+        // background refreshes of the two chat endpoints (non blocking)
+        fetchFlow();
+        fetchAssistantThread(false);
+        if (S.selectedAgent) fetchAgentThread(S.selectedAgent, false);
+        S.inFlight = null;
+      })
+      .catch(function (e) {
+        settled();
+        S.online = false;
+        // api() wraps transport failures (an abort arrives as "network error (...)"),
+        // so trust the flag the deadline set rather than the error's name.
+        S.lastError = timedOut
+          ? ("no answer within " + (PANEL_TIMEOUT_MS / 1000) + "s")
+          : errText(e);
+        setBanner("stale", "server unreachable \u2014 " + S.lastError +
+          (S.panel ? " \u00b7 showing last good data" : "") + " \u00b7 retrying every 10s");
+        render();
+        S.inFlight = null;
+      });
+    return S.inFlight;
+  }
+
+  // ---- Flow panel: the hand-off chain per task ----
+  function fetchFlow() {
+    return api("/company/flow?limit=30")
+      .then(function (r) { S.flow = asArray(r && r.tasks); renderFlow(); })
+      .catch(function () { /* keep last good */ });
+  }
+  function whoClass(name) {
+    var n = String(name || "").toLowerCase();
+    if (n === "ceo") return "ceo";
+    if (n.indexOf("assistant") === 0) return "asst";
+    if (n.indexOf("laya") === 0) return "laya";
+    if (n.indexOf("claude") === 0) return "claude";
+    return "worker";
+  }
+  function stClass(s) { return s === "merged" ? "merged" : (s === "failed" || s === "rejected") ? "failed" : "run"; }
+  function hm(iso) { try { var d = new Date(iso); return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); } catch (e) { return ""; } }
+  function renderFlow() {
+    var list = byId("flowList"), det = byId("flowDetail");
+    if (!list || !det) return;
+    var tasks = asArray(S.flow);
+    if (!tasks.length) { list.innerHTML = '<div class="muted small" style="padding:12px">No tasks yet. Give the assistant an order below.</div>'; return; }
+    if (!S.flowSel || !tasks.some(function (t) { return t.taskId === S.flowSel; })) S.flowSel = tasks[0].taskId;
+    list.innerHTML = tasks.map(function (t) {
+      var hops = asArray(t.trace).length;
+      return '<div class="frow' + (t.taskId === S.flowSel ? " active" : "") + '" data-tid="' + esc(t.taskId) + '">' +
+        '<div class="ft">' + esc(t.request) + '</div>' +
+        '<div class="fm"><span class="fst ' + stClass(t.status) + '">' + esc(t.status) + '</span> ' +
+        esc(t.projectName) + ' · ' + esc(t.departmentName) + ' · ' + hops + ' hops · ' + esc(hm(t.updatedAt)) + '</div></div>';
+    }).join("");
+    Array.prototype.forEach.call(list.querySelectorAll(".frow"), function (el) {
+      el.onclick = function () { S.flowSel = el.getAttribute("data-tid"); renderFlow(); };
+    });
+    var t = tasks.filter(function (x) { return x.taskId === S.flowSel; })[0];
+    var trace = asArray(t.trace);
+    var html = '<div class="small muted">task ' + esc(t.taskId) + ' · ' + esc(t.projectName) + ' · <span class="fst ' + stClass(t.status) + '">' + esc(t.status) + '</span></div>' +
+      '<div style="margin:6px 0 8px;font-size:12.5px">' + esc(t.request) + '</div>';
+    if (!trace.length) html += '<div class="muted small">No hand-off trace for this task (it ran before tracing was added).</div>';
+    html += trace.map(function (h) {
+      return '<div class="hop"><div class="hts">' + esc(hm(h.ts)) + '</div><div>' +
+        '<div class="hw"><span class="who2 ' + whoClass(h.from) + '">' + esc(h.from) + '</span>' +
+        '<span class="hwhat">&rarr; ' + esc(h.what) + ' &rarr;</span>' +
+        '<span class="who2 ' + whoClass(h.to) + '">' + esc(h.to) + '</span></div>' +
+        (h.detail ? '<div class="hdet">' + esc(h.detail) + '</div>' : '') + '</div></div>';
+    }).join("");
+    if (t.error) html += '<div class="fresult" style="border-color:#6a2a2a;color:#ffb4ae">' + esc(t.error) + '</div>';
+    if (t.result) html += '<div class="fresult"><b>Result</b>\n' + esc(t.result) + '</div>';
+    det.innerHTML = html;
+  }
+
+  function fetchAssistantThread(force) {
+    var n = num(S.assistantFails, 0);
+    if (!force && n >= 3 && (S.tickCount % 3) !== 0) return Promise.resolve(); // ~30s retry after repeated failures (10s tick)
+    return api("/company/assistant/thread?limit=100")
+      .then(function (r) {
+        S.assistantThread = asArray(r && r.messages);
+        S.assistantThreadErr = "";
+        S.assistantFails = 0;
+        renderAssistant();
+      })
+      .catch(function (e) {
+        S.assistantFails = n + 1;
+        S.assistantThreadErr = errText(e);
+        renderAssistant();
+      });
+  }
+
+  function fetchAgentThread(id, force) {
+    if (!id) return Promise.resolve();
+    var n = num(S.threadFails[id], 0);
+    if (!force && n >= 3 && (S.tickCount % 3) !== 0) return Promise.resolve(); // ~30s retry after repeated failures (10s tick)
+    return api("/company/agents/" + enc(id) + "/thread?limit=100")
+      .then(function (r) {
+        S.threadById[id] = { messages: asArray(r && r.messages), err: "", at: nowIso() };
+        S.threadFails[id] = 0;
+        renderAgents();
+      })
+      .catch(function (e) {
+        var th = S.threadById[id] || { messages: [], err: "", at: "" };
+        th.err = errText(e);
+        S.threadById[id] = th;
+        S.threadFails[id] = n + 1;
+        renderAgents();
+      });
+  }
+
+  function tickClocks() {
+    var d = new Date();
+    var c = byId("clock");
+    if (c) {
+      var txt = hhmmss(d) + (S.paused ? " paused" : "");
+      if (c.textContent !== txt) c.textContent = txt;
+      c.className = "clock" + (S.paused ? " paused" : "");
+    }
+    var nodes = document.querySelectorAll ? document.querySelectorAll("[data-started]") : [];
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var started = el.getAttribute("data-started");
+      if (!started) continue;
+      el.textContent = dur(started, el.getAttribute("data-finished") || null);
+    }
+  }
+
+  /* =====================================================================
+     EVENTS
+     ===================================================================== */
+  function onAct(act, node) {
+    if (act === "refresh") { S.flash = ""; pollNow(true); return; }
+    if (act === "select-agent") {
+      S.selectedAgent = str(node.getAttribute("data-agent"));
+      var th = S.threadById[S.selectedAgent];
+      if (!th || th.err) fetchAgentThread(S.selectedAgent, true);
+      render();
+      return;
+    }
+    if (act === "ass-send") { sendAssistant(); return; }
+    if (act === "agent-send") { sendAgent(false); return; }
+    if (act === "approve") {
+      approve(str(node.getAttribute("data-project")), str(node.getAttribute("data-task")), cls(node.getAttribute("data-gate")));
+      return;
+    }
+    if (act === "goto-task") { gotoTasks(str(node.getAttribute("data-project")), str(node.getAttribute("data-task"))); return; }
+    if (act === "toggle-dept") {
+      var did = str(node.getAttribute("data-dept"));
+      S.orgOpen[did] = S.orgOpen[did] === false;
+      render();
+      return;
+    }
+  }
+
+  function bind() {
+    document.addEventListener("click", function (ev) {
+      var t = ev.target;
+      while (t && t !== document && !(t.getAttribute && t.getAttribute("data-act"))) t = t.parentNode;
+      if (!t || t === document || !t.getAttribute) return;
+      var act = t.getAttribute("data-act");
+      if (!act) return;
+      ev.preventDefault();
+      try { onAct(act, t); } catch (e) { S.flash = "action failed: " + errText(e); render(); }
+    });
+    document.addEventListener("input", function (ev) {
+      var e = ev.target;
+      if (!e || !e.id) return;
+      if (e.tagName === "TEXTAREA") S.drafts[e.id] = e.value;
+      if (e.id === "sessFilter") render();
+    });
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Enter" || ev.shiftKey) return;
+      var e = ev.target;
+      if (!e || !e.id) return;
+      if (e.id === "assInput") { ev.preventDefault(); sendAssistant(); }
+      if (e.id === "agentInput") { ev.preventDefault(); sendAgent(false); }
+    });
+    document.addEventListener("change", function (ev) {
+      var e = ev.target;
+      if (!e || !e.id) return;
+      if (e.id === "pauseToggle") {
+        S.paused = !!e.checked;
+        S.flash = S.paused ? "auto-refresh paused" : "";
+        render();
+        if (!S.paused) pollNow(true);
+        return;
+      }
+      if (e.id === "sessFilter" || e.id === "sessStatus" || e.id === "onlyRunning" || e.id === "autoRun") render();
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) pollNow(true);
+    });
+  }
+
+  /* =====================================================================
+     BOOT
+     ===================================================================== */
+  bind();
+  render();
+  pollNow(true);
+  // PERF-UI (docs/PERF_SPEC.md item 5): /company/panel is 1.49 MB and the old
+  // dashboard asked for it every 2 s, so a single open tab could keep the
+  // router's event loop saturated for every other user. 10 s now.
+  setInterval(function () { S.tickCount++; pollNow(false); }, 10000);
+  setInterval(tickClocks, 1000);
+
+  // test/inspection hook (harmless in the browser)
+  window.__dash = {
+    S: S, render: render, pollNow: pollNow, visualOf: visualOf, agentList: agentList,
+    budgetOf: budgetOf, money: money, dur: dur, esc: esc, barHtml: barHtml, pill: pill,
+    sessionRow: sessionRow, budgetRow: budgetRow, sendStateHtml: sendStateHtml, appr: false
+  };
+})();
+</script>
+</body>
+</html>

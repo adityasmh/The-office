@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laya adaptive routing</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2230;--line:#2b3440;--fg:#e6edf3;--dim:#8b949e;
+        --ok:#3fb950;--warn:#d29922;--bad:#f85149;--accent:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
+  header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  h1{font-size:15px;margin:0}
+  .sub{color:var(--dim)}
+  main{padding:16px;display:grid;gap:14px;grid-template-columns:1fr}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 10px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--dim);font-weight:600}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;padding:1px 7px;border-radius:999px;border:1px solid var(--line);font-size:11px}
+  .pill.on{background:#3d1d1d;border-color:var(--bad);color:#ffb3ae}
+  .pill.off{color:var(--dim)}
+  .pill.ok{background:#10251a;border-color:var(--ok);color:#7ee787}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .kv{display:flex;gap:6px;align-items:baseline;padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}
+  .kv b{font-variant-numeric:tabular-nums}
+  .dec{max-height:340px;overflow:auto}
+  .dec div{padding:3px 0;border-bottom:1px solid var(--line)}
+  .ts{color:var(--dim)}
+  .chg{color:var(--warn)}
+  .exp{color:var(--accent)}
+  .empty{color:var(--dim);padding:6px 0}
+  .hist{display:flex;gap:6px;flex-wrap:wrap}
+  .hist .kv.good{border-color:#1f4d2b}
+</style>
+</head>
+<body>
+<header>
+  <h1>&#9670; Laya adaptive routing</h1>
+  <span id="mode" class="sub">loading...</span>
+  <span id="upd" class="sub"></span>
+  <span id="flags" class="bar"></span>
+</header>
+<main>
+  <section>
+    <h2>Topic / broker (Kafka)</h2>
+    <div id="bus" class="bar"></div>
+    <div id="busDetail" class="sub" style="margin-top:8px"></div>
+  </section>
+  <section>
+    <h2>Estimator lag &amp; traffic</h2>
+    <div id="lag" class="bar"></div>
+  </section>
+  <section>
+    <h2>P(success | model, task class)</h2>
+    <table id="tbl"><thead><tr>
+      <th>model</th><th>class</th><th class="num">n</th><th class="num">P(success)</th>
+      <th class="num">recent</th><th class="num">p50</th><th class="num">p95</th><th class="num">$/call</th>
+      <th>circuit</th><th>top failure kind</th>
+    </tr></thead><tbody id="rows"></tbody></table>
+    <div id="noRows" class="empty">No samples yet.</div>
+  </section>
+  <section>
+    <h2>Failure kinds</h2>
+    <div id="kinds" class="hist"></div>
+  </section>
+  <section>
+    <h2>Last routing decisions (reasons)</h2>
+    <div id="decisions" class="dec"></div>
+  </section>
+</main>
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+function num(x, d) { return (x === null || x === undefined || !isFinite(x)) ? "-" : Number(x).toFixed(d === undefined ? 2 : d); }
+function pct(x) { return x === null || x === undefined ? "cold" : (x * 100).toFixed(0) + "%"; }
+function kv(label, value, cls) { return '<span class="kv ' + (cls || "") + '">' + esc(label) + ' <b>' + esc(value) + "</b></span>"; }
+function pill(label, on, detail) { return '<span class="pill ' + (on ? "on" : "off") + '" title="' + esc(detail || "") + '">' + esc(label) + "</span>"; }
+
+function render(s) {
+  var env = s.env || {}, bus = s.bus || {}, c = s.counters || {};
+  $("mode").textContent = (s.enabled ? "running" : "off") + "  |  " + env.mode + "  |  min P " + env.minSuccess + "  |  explore " + (env.explore * 100) + "%  |  cool-off " + Math.round((env.cooldownMs || 0) / 1000) + "s";
+  $("upd").textContent = "updated " + (s.capturedAt || "");
+  var f = (s.flags || []).map(function (x) { return pill(x.label, x.on, x.detail); }).join("");
+  $("flags").innerHTML = f;
+
+  var broker = bus.brokerRequested ? (bus.brokerUp ? "Kafka up" : "Kafka down, using in-process") : "in-process only";
+  $("bus").innerHTML =
+    kv("backend", bus.backend) +
+    kv("broker", broker, bus.brokerUp ? "good" : (bus.brokerRequested ? "bad" : "")) +
+    kv("events/s", num(bus.eventsPerSec, 2)) +
+    kv("dropped at producer", bus.dropped, bus.dropped > 0 ? "bad" : "") +
+    kv("produce errors", bus.produceErrors) +
+    kv("unparseable (DLQ)", bus.unparseable);
+  var td = "";
+  Object.keys(bus.topics || {}).forEach(function (t) {
+    var x = bus.topics[t];
+    td += "<div>" + esc(t) + ": high-water " + x.highWater + " [" + (x.offsets || []).join(", ") + "] &middot; producer " + x.produced + " &middot; " + esc(x.retention) + "</div>";
+  });
+  (bus.groups || []).forEach(function (g) {
+    td += "<div>group " + esc(g.group) + " on " + esc(g.topic) + ": committed " + g.committed + ", lag " + g.lag + ", last message " + g.lagMs + " ms ago</div>";
+  });
+  $("busDetail").innerHTML = td + (bus.brokerDetail ? "<div>" + esc(bus.brokerDetail) + "</div>" : "");
+
+  $("lag").innerHTML =
+    kv("estimator lag", (bus.lagMs || 0) + " ms", (bus.lagMs || 0) > 5000 ? "bad" : "good") +
+    kv("applied events", c.appliedEvents) +
+    kv("learned pairs", c.learnedPairs) +
+    kv("decisions", c.decisions) +
+    kv("escalations", c.escalations) +
+    kv("explorations", c.explorations) +
+    kv("cold starts", c.coldStarts) +
+    kv("dupes ignored", c.dupes) +
+    (s.persistence ? kv("outcomes.jsonl", (s.persistence.outcomesLines || 0) + " lines / " + Math.round((s.persistence.outcomesBytes || 0) / 1024) + " KB") : "");
+
+  var circuits = s.circuits || {};
+  var rows = s.estimator || [];
+  $("noRows").style.display = rows.length ? "none" : "";
+  $("rows").innerHTML = rows.map(function (r) {
+    var key = r.model + "|" + r.cls;
+    var st = circuits[key] ? "open" : "closed";
+    var kinds = Object.keys(r.kinds || {}).filter(function (k) { return k !== "ok" && r.kinds[k] > 0; })
+      .sort(function (a, b) { return r.kinds[b] - r.kinds[a]; });
+    var top = kinds.length ? kinds[0] + " x" + r.kinds[kinds[0]] : "-";
+    return "<tr><td>" + esc(r.model) + "</td><td>" + esc(r.cls) + "</td>" +
+      '<td class="num">' + r.n + "</td>" +
+      '<td class="num" style="color:' + (r.p === null ? "var(--dim)" : r.p >= 0.85 ? "var(--ok)" : r.p >= 0.5 ? "var(--warn)" : "var(--bad)") + '">' + pct(r.p) + "</td>" +
+      '<td class="num">' + r.recentN + " (" + r.recent429 + "x 429)</td>" +
+      '<td class="num">' + r.latencyP50 + " ms</td>" +
+      '<td class="num">' + r.latencyP95 + " ms</td>" +
+      '<td class="num">$' + num(r.costPerCall, 4) + "</td>" +
+      "<td>" + (st === "open" ? '<span class="pill on">open</span>' : '<span class="pill ok">closed</span>') + "</td>" +
+      "<td>" + esc(top) + "</td></tr>";
+  }).join("");
+
+  var hist = s.failureKinds || {};
+  $("kinds").innerHTML = Object.keys(hist).map(function (k) {
+    return kv(k, hist[k], k === "ok" ? "good" : "");
+  }).join("");
+
+  var d = s.decisions || [];
+  $("decisions").innerHTML = d.length ? d.map(function (x) {
+    return '<div><span class="ts">' + esc((x.ts || "").slice(11, 19)) + "</span> " +
+      '<span class="' + (x.explored ? "exp" : x.changed ? "chg" : "") + '">' + esc(x.cls) + "</span> " +
+      esc(x.prior) + " &rarr; " + esc(x.chosen) +
+      (x.changed ? ' <span class="chg">(changed)</span>' : "") +
+      (x.explored ? ' <span class="exp">(exploration)</span>' : "") +
+      ' &middot; <span class="ts">' + esc(x.reason) + "</span></div>";
+  }).join("") : '<div class="empty">No decisions recorded yet.</div>';
+}
+
+function load() {
+  fetch("/company/adaptive", { cache: "no-store" })
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function (s) { render(s); })
+    .catch(function (e) {
+      $("mode").textContent = "GET /company/adaptive failed: " + e.message;
+    });
+}
+load();
+setInterval(load, 1500);
+</script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet work-order cards</title>
+<style>
+  :root {
+    --page-bg: #f6f7f9;
+    --card-bg: #ffffff;
+    --ink: #111827;
+    --ink-muted: #6b7280;
+    --line: #e5e7eb;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    background: var(--page-bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+      "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+    line-height: 1.5;
+    padding: 32px 20px 48px;
+  }
+
+  .wrap {
+    max-width: 1040px;
+    margin: 0 auto;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    line-height: 1.25;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  .lede {
+    margin: 0 0 24px;
+    color: var(--ink-muted);
+    font-size: 0.925rem;
+  }
+
+  /* three work-order cards side by side */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+
+  .cell {
+    min-width: 0;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.05);
+  }
+
+  .card .id {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+
+  .card .title {
+    margin: 8px 0 12px;
+    font-size: 1.05rem;
+    line-height: 1.35;
+  }
+
+  .card .role {
+    margin: 0 0 16px;
+    font-size: 0.875rem;
+    color: var(--ink-muted);
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1.6;
+  }
+
+  .pill.planned {
+    background: #e5e7eb;
+    color: #374151;
+  }
+
+  .pill.working {
+    background: #fde68a;
+    color: #92400e;
+  }
+
+  .pill.reviewed {
+    background: #bbf7d0;
+    color: #166534;
+  }
+
+  .meta {
+    margin: 10px 2px 0;
+    font-size: 0.8125rem;
+    color: var(--ink-muted);
+  }
+
+  /* narrow screens: stack the cards in a single column */
+  @media (max-width: 720px) {
+    body { padding: 20px 14px 36px; }
+    .grid { grid-template-columns: 1fr; gap: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Fleet work-order cards</h1>
+  <p class="lede">Sample work orders, one per state: planned, working, reviewed.</p>
+
+  <div class="grid">
+    <div class="cell">
+      <article class="card">
+        <p class="id">wo-fleet-1042</p>
+        <h2 class="title">Slack bridge retry backoff</h2>
+        <p class="role">role: backend</p>
+        <span class="pill planned">planned</span>
+      </article>
+      <p class="meta">model: claude-opus · confidence 0.92</p>
+    </div>
+
+    <div class="cell">
+      <article class="card">
+        <p class="id">wo-fleet-1043</p>
+        <h2 class="title">Fleet view live tail polling</h2>
+        <p class="role">role: ui</p>
+        <span class="pill working">working</span>
+      </article>
+      <p class="meta">model: claude-sonnet · confidence 0.81</p>
+    </div>
+
+    <div class="cell">
+      <article class="card">
+        <p class="id">wo-fleet-1044</p>
+        <h2 class="title">Routing spec self-check doc</h2>
+        <p class="role">role: docs</p>
+        <span class="pill reviewed">reviewed</span>
+      </article>
+      <p class="meta">model: gpt-5 · confidence 0.97</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# Work order: router is DOWN, supervisor is wedged again - replace the supervisor and start the router NOW
+
+From: manager. Model: deepseek-v4.1-flash. Repo: C:\Users\user\Desktop\Default Project
+
+DECISION (manager, 17:35 local): the supervisor pid 16656 is wedged, same as the first outage today. Evidence: its last log line was 17:08:47 ("healthy pid=24760 idle watch"), the router (24760) died ~17:27 and in 7+ minutes the supervisor did nothing (no log, no start). It holds logs\router-supervisor.lock. You ARE allowed and expected to stop it (this reverses the earlier "do not kill the supervisor" instruction, which was based on a wrong theory). The heartbeat worker (pid 1132) only edits ops\router-supervisor.ps1 and ops\supervisor-watchdog.ps1 on disk: it does not run the live supervisor. Do not edit those two files; read-only.
+
+Do, in this order, no deliberation loops:
+1. Confirm: nothing on :8787 (`netstat -ano | findstr :8787`), pid 24760 gone, pid 16656 alive and its command line contains `ops\router-supervisor.ps1` of this repo (Get-CimInstance can time out: use `wmic process where processid=16656 get commandline` or Get-Process + a 10 s time limit).
+2. Stop ONLY pid 16656 (`taskkill /PID 16656 /T /F`) and delete the stale `logs\router-supervisor.lock` after verifying the pid inside it is dead. If the lock holds some other live pid, report instead.
+3. Start the supervisor the documented way: `schtasks /run /tn LayaCompanyRouterSupervisor` (if its state is not Ready/Running enable it first with `schtasks /change /tn LayaCompanyRouterSupervisor /enable`). Exactly one supervisor, hidden window. Never start a router by hand, never a visible window.
+4. Wait up to 3 minutes for the router: `netstat` listener on 8787 with a new pid, GET http://localhost:8787/health 200 (30 s timeouts), 5 health calls with max ms, GET / 200, GET /api/needs-you answers. router.err.log: no UNCAUGHT/fatal lines after the new BOOT. If the router fails to boot, read logs\router.crash.log and router.err.log, report the exact error and which file/worker owns it (heartbeat worker edits ops/, adaptive/air-gap/cache workers edit src/), and STOP.
+5. Find why the old router died (it left no crash line): check logs\jcode-*-20261001.log for Stop-Process/taskkill that hit 24760 or node, the Windows Application event log (Get-WinEvent Level 1,2 around 17:26-17:28 local), and free RAM at that time. Report the most likely cause with evidence, or say "unknown".
+6. Check no fleet order was hurt: compare statuses in company/fleet/orders.json against %TEMP%\orders-before-restart.json if present and the list of orders that were running at 17:25 (fomupf08jc, fomupgip2e, fomupgip32, fomupf7f4a). Report any running -> failed.
+7. Do NOT touch Laya on :8000, Kafka, the cuda session, any other worker's process, or turn ADAPTIVE_ROUTING on. No secrets, no deletes except the stale lock. Append a timestamped entry to docs/AGENT_COORDINATION.md. Report to the manager.
