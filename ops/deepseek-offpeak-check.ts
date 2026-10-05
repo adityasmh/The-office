@@ -2,6 +2,8 @@
  * ops/deepseek-offpeak-check.ts — proof for the DeepSeek direct off-peak routing
  * (docs/DEEPSEEK_DIRECT.md, CEO order 2026-10-01).
  *
+ * Rule now tested (POLICY-GO-FIRST 2026-10-06): healthy Go quota stays on Go at any hour; off-peak direct is opt-in (DEEPSEEK_OFFPEAK_DIRECT=1).
+ *
  * Three things, in order:
  *   1. WINDOW MATH: the clock against known timestamps (weekday peak, the 04:00-06:00 UTC
  *      gap, the UTC weekend, the weekend roll into Monday), plus the IST rendering.
@@ -77,11 +79,14 @@ async function main() {
   // 2b. The gate, made deterministic with a FAKE key so nothing can reach the network. The
   // real environment is saved first: this box may itself be armed, so "unarmed" is built
   // explicitly rather than assumed.
-  const saved = { flag: process.env.DEEPSEEK_DIRECT, key: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_DIRECT_MODEL, allHours: process.env.DEEPSEEK_DIRECT_ALL_HOURS };
+  const saved = { flag: process.env.DEEPSEEK_DIRECT, key: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_DIRECT_MODEL, allHours: process.env.DEEPSEEK_DIRECT_ALL_HOURS, offpeakDirect: process.env.DEEPSEEK_OFFPEAK_DIRECT };
   // The cases below pin the CLOCK with explicit timestamps, so the "also at peak" switch must be
   // cleared: `.env` sets DEEPSEEK_DIRECT_ALL_HOURS=1 (CEO order 2026-10-01), which would make the
   // peak cases assert the wrong rule. It is exercised explicitly a few lines below instead.
   delete process.env.DEEPSEEK_DIRECT_ALL_HOURS;
+  // POLICY-GO-FIRST: off-peak direct is now an OPT-IN, so pin it OFF for the default cases below
+  // and set it per case where the old rule is the one under test.
+  delete process.env.DEEPSEEK_OFFPEAK_DIRECT;
   const hasBankNote = () => modelCatalog().some((m) => /DeepSeek direct API/.test(m.label));
   process.stdout.write("\nGATE (fake key in-process; no call is made)\n");
 
@@ -115,8 +120,11 @@ async function main() {
     detail: "ops/deepseek-offpeak-check.ts (injected)",
     checkedAt: "2026-10-01T11:00:00Z",
   } as import("../src/company/usage.js").GoQuota);
+  // POLICY-GO-FIRST changed the default, so this case pins the opt-in to keep testing the preserved
+  // 2026-10-01 rule ("off-peak -> direct"); the new default is checked after the block below.
+  process.env.DEEPSEEK_OFFPEAK_DIRECT = "1";
   const offPlan = deepseekDirectPlan("deepseek-v4.1-flash", new Date("2026-10-01T11:00:00Z"));
-  check("armed, off-peak -> direct", offPlan.use, true);
+  check("armed, off-peak + DEEPSEEK_OFFPEAK_DIRECT=1 -> direct (the old rule)", offPlan.use, true);
   check("fleet id deepseek-v4.1-flash -> direct id deepseek-flash", offPlan.model, "deepseek-flash");
   check("Go id deepseek-v4-flash -> direct id deepseek-flash", deepseekDirectModel("deepseek-v4-flash"), "deepseek-flash");
   check("an already-direct id stays deepseek-flash", deepseekDirectModel("deepseek-flash"), "deepseek-flash");
@@ -131,6 +139,12 @@ async function main() {
     deepseekDirectPlan("deepseek-v4.1-flash", new Date("2026-10-01T00:30:00Z")).use,
     false,
   );
+  delete process.env.DEEPSEEK_OFFPEAK_DIRECT;
+  // POLICY-GO-FIRST (CEO order 2026-10-06): the NEW DEFAULT. A healthy Go window carries off-peak
+  // work on OpenCode Go and spends no credits; the opt-in above is what restores direct.
+  const offPeakDefault = deepseekDirectPlan("deepseek-v4.1-flash", new Date("2026-10-01T11:00:00Z"));
+  check("off-peak + healthy quota (no opt-in) -> OpenCode Go, no credits", offPeakDefault.use, false);
+  check("...and the why is the go-first sentence", /using OpenCode Go, no credits spent/.test(offPeakDefault.why), true);
   // The .env line the CEO order added: DEEPSEEK_DIRECT_ALL_HOURS=1 routes at peak too (paying 2x,
   // still spending no Go quota). Both blocks, so the flag cannot be half-wired.
   process.env.DEEPSEEK_DIRECT_ALL_HOURS = "1";
@@ -145,19 +159,21 @@ async function main() {
     true,
   );
   delete process.env.DEEPSEEK_DIRECT_ALL_HOURS;
-  // ROUTING POLICY (CEO order 2026-10-02): Kimi/GLM/Qwen picks are MAPPED to DeepSeek when the
-  // policy says direct (off-peak, known quota < 10%, or UNKNOWN quota). At off-peak a kimi pick maps
-  // to deepseek-flash; at peak with a KNOWN healthy quota it stays on Go, but with UNKNOWN quota it
-  // routes direct rather than risk an exhausted OpenCode weekly window.
+  // ROUTING POLICY (POLICY-GO-FIRST, CEO order 2026-10-06): Kimi/GLM/Qwen picks are MAPPED to
+  // DeepSeek only when the plan body says direct (known quota < 10%, a fresh Go 429, or the
+  // DEEPSEEK_OFFPEAK_DIRECT=1 opt-in at off-peak). At peak with a KNOWN healthy quota a kimi pick
+  // stays on Go, and an UNKNOWN quota stays on Go too (never spend credits on a guess).
+  process.env.DEEPSEEK_OFFPEAK_DIRECT = "1";
   const kimiOff = deepseekDirectPlan("kimi-k2.7-code", new Date("2026-10-01T11:00:00Z"));
-  check("a kimi pick maps to DeepSeek direct at off-peak", kimiOff.use, true);
+  check("a kimi pick maps to DeepSeek direct at off-peak + DEEPSEEK_OFFPEAK_DIRECT=1", kimiOff.use, true);
   check("a kimi pick maps to deepseek-flash", kimiOff.model, "deepseek-flash");
+  delete process.env.DEEPSEEK_OFFPEAK_DIRECT;
   check("a kimi pick stays on Go at peak with a KNOWN healthy quota", deepseekDirectPlan("kimi-k2.7-code", new Date("2026-10-01T02:00:00Z")).use, false);
   setGoUsageCache(null);
   check(
-    "a kimi pick routes direct at peak when the Go quota is UNKNOWN (CEO order B)",
+    "a kimi pick stays on Go at peak when the Go quota is UNKNOWN (POLICY-GO-FIRST)",
     deepseekDirectPlan("kimi-k2.7-code", new Date("2026-10-01T02:00:00Z")).use,
-    true,
+    false,
   );
 
   // restore the real environment before the live call
@@ -168,6 +184,8 @@ async function main() {
   if (saved.model !== undefined) process.env.DEEPSEEK_DIRECT_MODEL = saved.model;
   if (saved.allHours === undefined) delete process.env.DEEPSEEK_DIRECT_ALL_HOURS;
   else process.env.DEEPSEEK_DIRECT_ALL_HOURS = saved.allHours;
+  if (saved.offpeakDirect === undefined) delete process.env.DEEPSEEK_OFFPEAK_DIRECT;
+  else process.env.DEEPSEEK_OFFPEAK_DIRECT = saved.offpeakDirect;
 
   // 3. Live call.
   process.stdout.write("\nLIVE\n");

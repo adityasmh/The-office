@@ -3,15 +3,18 @@
  * (work order 2026-10-01: "do not hold Fleet orders for OpenCode Go quota when they will
  * run on DeepSeek direct").
  *
+ * Rule now tested (POLICY-GO-FIRST 2026-10-06): a healthy OpenCode Go window holds off-peak work on Go; the (a)/(c) skip needs DEEPSEEK_OFFPEAK_DIRECT=1.
+ *
  * It runs the REAL decision the launch gate runs — `fleet.fleetBudgetHold()`, which calls
  * the real `budget.fleetQueueForBudget()`, `direct.deepseekDirectPlan()` and
  * `direct.fleetDirectReady()` — against forced red/amber/green rule tables built by the
  * guard's own `rulesFor()`, with the DeepSeek clock pinned via `at` so the phase is exact.
  *
  * The cases (the work order's Verify list):
- *   (a) Go red + a DeepSeek model + off-peak 11:00Z + armed + a ready terminal -> NOT held;
+ *   (a) Go red + a DeepSeek model + off-peak 11:00Z + armed + a ready terminal + DEEPSEEK_OFFPEAK_DIRECT=1 -> NOT held;
+ *   (a2) the same at off-peak WITHOUT the opt-in (the go-first default)      -> held;
  *   (b) the same at peak 02:00Z                                              -> held;
- *   (c) a Kimi model at off-peak                                             -> NOT held (policy maps it);
+ *   (c) a Kimi model at off-peak + DEEPSEEK_OFFPEAK_DIRECT=1                 -> NOT held (policy maps it);
  *   (d) a terminal that cannot launch DeepSeek (no login)                    -> held;
  *   (e) Go amber / green                                                     -> unchanged.
  * Plus: an armed-but-keyless box keeps waiting (behaviour as today).
@@ -96,6 +99,7 @@ async function main(): Promise<void> {
     // the peak/Kimi cases assert something other than the rule they name.
     allHours: process.env.DEEPSEEK_DIRECT_ALL_HOURS,
     deepseekOnly: process.env.FLEET_DEEPSEEK_ONLY,
+    offpeakDirect: process.env.DEEPSEEK_OFFPEAK_DIRECT,
   };
   // Arm the provider explicitly (this box may be unarmed) and require a ready terminal.
   process.env.DEEPSEEK_DIRECT = "1";
@@ -103,6 +107,9 @@ async function main(): Promise<void> {
   process.env.FLEET_DEEPSEEK_DIRECT_READY = "1";
   delete process.env.DEEPSEEK_DIRECT_ALL_HOURS;
   delete process.env.FLEET_DEEPSEEK_ONLY;
+  // POLICY-GO-FIRST: off-peak direct is now an OPT-IN, so the default here is "off" and the cases
+  // that test the preserved old rule pin it for their own duration.
+  delete process.env.DEEPSEEK_OFFPEAK_DIRECT;
   direct.resetFleetDirectReady();
   // A KNOWN healthy Go snapshot: (b) proves "peak -> held" for a KNOWN quota. CEO order 2026-10-02
   // (B) routes UNKNOWN quota direct instead, proven by ops/deepseek-policy-check.ts.
@@ -128,7 +135,9 @@ async function main(): Promise<void> {
       `queue=${q.queue} :: ${q.reason}`,
     );
 
-    // (a) red + deepseek + off-peak + armed + ready -> NOT held.
+    // (a) red + deepseek + off-peak + armed + ready + the opt-in -> NOT held.
+    // POLICY-GO-FIRST kept this rule only behind DEEPSEEK_OFFPEAK_DIRECT=1, so pin it for the case.
+    process.env.DEEPSEEK_OFFPEAK_DIRECT = "1";
     const a = await gate("red", DEEPSEEK, OFFPEAK);
     check(
       "(a) red + deepseek model + off-peak 11:00Z + armed + ready -> NOT held",
@@ -140,15 +149,27 @@ async function main(): Promise<void> {
       a.direct?.use === true && a.direct?.provider === "deepseek" && a.direct?.model === "deepseek-flash",
       JSON.stringify(a.direct ?? null),
     );
+    delete process.env.DEEPSEEK_OFFPEAK_DIRECT;
 
     // (b) the same at peak -> held.
     const b = await gate("red", DEEPSEEK, PEAK);
     check("(b) same at peak 02:00Z -> held", b.hold === true, `hold=${b.hold} :: ${b.reason}`);
 
-    // (c) a Kimi model at off-peak -> NOT held: the routing POLICY (CEO order 2026-10-02) maps
-    // kimi/glm/qwen onto DeepSeek direct when it says direct (off-peak, or Go quota < 10%), so the
-    // order spends no Go quota and the hold protects nothing.
+    // (a2) POLICY-GO-FIRST default (no opt-in): a healthy Go window carries off-peak work on
+    // OpenCode Go, so the red-Go hold still protects it.
+    const a2 = await gate("red", DEEPSEEK, OFFPEAK);
+    check(
+      "(a2) red + deepseek model + off-peak, default (no opt-in) -> held (go-first: stays on Go)",
+      a2.hold === true && /waiting for budget: OpenCode Go is red/.test(a2.reason),
+      `hold=${a2.hold} :: ${a2.reason}`,
+    );
+
+    // (c) a Kimi model at off-peak + the DEEPSEEK_OFFPEAK_DIRECT=1 opt-in -> NOT held: the routing
+    // POLICY maps kimi/glm/qwen onto DeepSeek direct when it says direct (Go quota < 10%, or the
+    // off-peak opt-in), so the order spends no Go quota and the hold protects nothing.
+    process.env.DEEPSEEK_OFFPEAK_DIRECT = "1";
     const c = await gate("red", KIMI, OFFPEAK);
+    delete process.env.DEEPSEEK_OFFPEAK_DIRECT;
     check("(c) red + Kimi model + off-peak -> NOT held (kimi maps to DeepSeek direct)", c.hold === false && c.direct?.use === true && c.direct?.model === "deepseek-flash", `hold=${c.hold} :: ${c.reason}`);
 
     // (d) no launchable DeepSeek terminal -> held, exactly as before.
@@ -195,6 +216,7 @@ async function main(): Promise<void> {
       JCODE_BIN: saved.bin,
       DEEPSEEK_DIRECT_ALL_HOURS: saved.allHours,
       FLEET_DEEPSEEK_ONLY: saved.deepseekOnly,
+      DEEPSEEK_OFFPEAK_DIRECT: saved.offpeakDirect,
     })) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
