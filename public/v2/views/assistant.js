@@ -468,7 +468,15 @@ export function mount(el, ctx) {
   const SPEECH_PROBE_MS = 1500; // loopback read cadence while the view is open
   const SPEECH_PROBE_RETRY_MS = 300000; // route absent: re-check every 5 min, NOT every tick
   const ROUTER_SILENT_GRACE_MS = 1500; // playback stopped: how long before calling it silence
-  const speechProbe = { route: false, speaking: false, askedAt: 0 };
+  const speechProbe = { route: false, speaking: false, ok: false, askedAt: 0 };
+
+  /** The route answered AND the machine's speech service is unreachable: it cannot speak at all.
+   *  `speaking` stays false in that answer, and the machine really is silent, so animating would be
+   *  a false "Joey is talking" signal - the live case on 2026-10-06 11:29Z, where
+   *  GET /company/assistant/speech answered {ok:false, error:"tts_unavailable", detail:"ECONNREFUSED"}.
+   *  A healthy probe that momentarily answers speaking:false is NOT this case (ok is true then): the
+   *  router posts the text before the speech server plays it, and that state must keep animating. */
+  const speechUnavailable = () => speechProbe.route && speechProbe.ok === false && speechProbe.speaking !== true;
 
   /* cadence note: while the route is there this is polled every SPEECH_PROBE_MS. While it is
    * NOT (every router until its next restart, so the live page today) the page asks once and
@@ -500,7 +508,21 @@ export function mount(el, ctx) {
     const first = !speechProbe.route;
     speechProbe.route = true;
     speechProbe.speaking = r.speaking === true;
-    if (first) console.log("[speak] speech probe live: the machine's own playback is the source of truth");
+    const ok = r.ok === true;
+    const okChanged = first || speechProbe.ok !== ok;
+    if (okChanged) {
+      console.log(
+        "[speak] speech probe live; speech service " +
+          (ok
+            ? "reachable: the machine's own playback is the source of truth"
+            : "unreachable (" + str(r.error || r.detail) + "): nothing is spoken aloud, so the companion stays still on purpose"),
+      );
+    }
+    speechProbe.ok = ok;
+    // The first answer (and any change of reachability) decides the pill's wording, so repaint
+    // now instead of waiting for the next utterance or poll - otherwise the card would say plain
+    // "Silent" while the machine's speech service is known to be down.
+    if (okChanged && !stopped) paintCompanion();
     // The machine is talking about something this page never saw born (a report-back written
     // while the tab was hidden, say): follow it, the same way the <audio> hook does.
     if (speechProbe.speaking && !speech && lastUtteranceText) startSpeech(lastUtteranceText, "router");
@@ -1430,6 +1452,13 @@ export function mount(el, ctx) {
     // The machine only speaks while the "Joey voice" toggle is on. Off means silence, and
     // silence must not animate anything.
     if (!readJoeyVoice()) return;
+    // SPEAK-TRUTH: when the route says the machine's speech service is down, no audio is produced
+    // for this reply either, so the companion must stay still and the transcript alone carries the
+    // words. A real <audio> element in this view is actual audio, so it is never gated on this.
+    if (source !== "audio" && speechUnavailable()) {
+      paintCompanion();
+      return;
+    }
     speech = {
       key: keyOf({ role: "assistant", text: clean }),
       text: clean,
@@ -1538,13 +1567,19 @@ export function mount(el, ctx) {
     // should be moving and is not", which is the exact question this card exists to answer.
     // So the pill says why, and the line says what the replies still do.
     const muted = !readJoeyVoice();
+    // SPEAK-TRUTH: "silent because the machine cannot speak" is a third case, and it needs its own
+    // words - otherwise a viewer sees a still dog while Joey's voice service is down and cannot tell
+    // that from a bug. Both the pill and the line say which silence this is.
+    const unavailable = !muted && speechUnavailable();
     compState.className = on ? "pill pill-run" : "pill";
-    compState.textContent = on ? "Speaking\u2026" : muted ? "Silent \u00b7 voice off" : "Silent";
+    compState.textContent = on ? "Speaking\u2026" : muted ? "Silent \u00b7 voice off" : unavailable ? "Silent \u00b7 voice unavailable" : "Silent";
     sayEl.textContent = on
       ? clip(speech.text, 160)
       : muted
         ? "Joey voice is off, so nothing is said out loud and the companion stays still. Replies still arrive in the chat and in the transcript below."
-        : "Nothing is being said. Every reply and report-back appears in the transcript below as it is said.";
+        : unavailable
+          ? "The machine's speech service is not reachable, so nothing is being said out loud and the companion stays still. Replies still arrive in the chat and in the transcript below."
+          : "Nothing is being said. Every reply and report-back appears in the transcript below as it is said.";
   }
 
   /**

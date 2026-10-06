@@ -7,7 +7,8 @@ import { postAs } from "../slack.js";
 import { callClaudeSubscription } from "../claudeSubscription.js";
 import { checkRuns, listRunCards, reportsDir, runCounts, runManagerKnobs } from "./runManagers.js";
 import type { CheckSummary, RunCard } from "./runManagers.js";
-import { classifyNeed, classifyApprovalRisk, jobPromptId, maxOrderRetries } from "./needsYouRule.js";
+import { classifyNeed, classifyApprovalRisk, jobPromptId, maxOrderRetries, setOrderErrorLookup, orderErrorForCard } from "./needsYouRule.js";
+import { budgetNeedsYou } from "./budgetGuard.js";
 import { type RoutineRun, enqueueRoutineRuns, queueEscalations as readQueueEscalations } from "./managerQueue.js";
 import { CLAUDE_SIGNIN_EXPIRED_MESSAGE, mentionsClaudeSignInExpired } from "./claudeSignIn.js";
 
@@ -270,6 +271,43 @@ function mentionsClaudeLimit(text: string): boolean {
   return /spend(ing)? limit|monthly limit|usage limit|out of (usage|credit)/i.test(text ?? "");
 }
 
+// ── WIDENED PROBE (fleet order error, 2026-10-07, work order fomux5ip10) ────
+//
+// A failed fleet order can carry its failure wording ONLY in the order's own
+// `error` field (a missing access key, or a Claude usage/spending limit). The
+// fleet probe below used to read only `headline + needsCeo`, so such an order
+// fell through to the generic "Retry this order or drop it?" choice instead of
+// the provide-key item or the Claude-limit item. RunCard does not carry the
+// error (runManagers.ts builds the card from it but does not copy `error`), so
+// the wording is joined to the card by orderId: tests pass an optional lookup
+// via setOrderErrorLookup (in-memory, so nothing reads the live company/
+// folder), while the real briefing wires it lazily to fleet.ts getFleetOrder.
+// Read-only, guarded, and the wording only - never any secret value.
+
+/**
+ * The failed order's own error text for a fleet card ("" when there is none):
+ * an optional `orderError` field on the card itself first (hermetic tests/ops
+ * build in-memory cards), otherwise the registered boot lookup runs, guarded
+ * (returning wording only, never a secret value - and a throwing lookup can
+ * never break a classification).
+ */
+function orderErrorWording(card: RunCard): string {
+  if (!card || typeof card !== "object") return "";
+  const direct = (card as { orderError?: unknown }).orderError;
+  if (typeof direct === "string") return direct;
+  try {
+    return orderErrorForCard(card) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** headline + needsCeo + verdictReason + the failed order's own error (when reachable). */
+function cardProbeWithOrderError(card: RunCard): string {
+  const wording = orderErrorWording(card);
+  return `${card.headline} ${card.needsCeo ?? ""} ${card.verdictReason ?? ""}${wording ? ` ${wording}` : ""}`;
+}
+
 /**
  * Turn one run card into a classified "needs you" item.
  * Pure: no disk, no model, no secrets.
@@ -364,7 +402,14 @@ export function classifyNeedsYou(card: RunCard, taskStatus?: string): BriefingIt
   if (card.kind === "fleet") {
     const ref = parseFleetRef(card.runId);
     const orderId = ref?.orderId ?? "";
-    const probe = `${card.headline} ${card.needsCeo ?? ""}`;
+    // REACHABILITY GAP (fomux5ip10, 2026-10-07): a failed order's failure wording can
+    // live ONLY in the order's own `error` field, and no classifyNeedsYou overload
+    // takes an OrderLike - classifier probes go through the card. Tests pass
+    // in-memory cards, so the wording is joined to the card by orderId:
+    // needsYouRule.orderErrorForCard reads an optional `orderError` field off the
+    // card or consults the registered fleet lookup. With neither present the
+    // wording is empty and the probe is byte-identical to the pre-change probe.
+    const probe = cardProbeWithOrderError(card);
     // RETRY LOOP (2026-09-30): the prompt's id is (job, why it failed), NOT the order id.
     // Every answer to "Retry this order or drop it?" used to mint a new order id, which
     // made the same question look like a brand-new prompt (and made the chat ask it
@@ -883,7 +928,6 @@ const requireFromHere = createRequire(import.meta.url);
 
 function budgetItemNow(): BriefingItem | null {
   try {
-    const { budgetNeedsYou } = requireFromHere("./budgetGuard.js") as typeof import("./budgetGuard.js");
     const b = budgetNeedsYou();
     if (!b) return null;
     return budgetNeedsYouItem(b);
@@ -900,6 +944,39 @@ function taskStatusNow(projectId: string, taskId: string): string | undefined {
     return undefined;
   }
 }
+
+// ── WIDENED PROBE wiring (fomux5ip10, 2026-10-07) ───────────────────────────
+//
+// classifyNeed (needsYouRule.ts) now reads a failed fleet order's own `error`
+// so a missing-key or Claude-limit wording that lives ONLY there still reaches
+// the provide-key / Claude-limit branches. This module owns how the real
+// lookup is built: lazily required from fleet.ts (which already provides the
+// order list used elsewhere here), read-only, guarded, and returning the order
+// error WORDING only - never any secret value. The registration is idempotent,
+// and a failed require must never break a briefing (the probe then just stays
+// at the pre-change width, headline + needsCeo + verdictReason).
+let orderLookupRegistered = false;
+
+function registerOrderErrorLookup(): void {
+  if (orderLookupRegistered) return;
+  orderLookupRegistered = true;
+  try {
+    setOrderErrorLookup((orderId: string) => {
+      try {
+        const fleet = requireFromHere("./fleet.js") as typeof import("./fleet.js");
+        return fleet.getFleetOrder(orderId)?.error;
+      } catch {
+        return undefined;
+      }
+    });
+  } catch {
+    // leave the lookup unregistered; classifyNeed falls back to the old probe
+  }
+}
+
+// Register on import, so every entrypoint that loads briefing.ts (the router,
+// the ops checks, the tests) gets the widened probe without touching src/server.ts.
+registerOrderErrorLookup();
 
 /**
  * CEO APPROVAL POLICY: the ONE prompt per escalated manager-queue entry. Read-only.
