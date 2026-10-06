@@ -208,10 +208,66 @@ export function jobPromptId(titleOrText: string | undefined, cause: string): str
 }
 
 function providerFromCard(card: RunCard): "go" | "claude" | undefined {
-  const text = `${card.headline} ${card.needsCeo ?? ""} ${card.verdictReason ?? ""}`.toLowerCase();
+  const text = `${headlineProbe(card)}`.toLowerCase();
   if (/claude|anthropic/.test(text)) return "claude";
   if (/kimi|opencode\s*go|go\s+gateway|open\s*code\s*go/.test(text)) return "go";
   return undefined;
+}
+
+// ── WIDENED PROBE (fleet order error, 2026-10-07) ────────────────────────────
+//
+// MEASURED (work order fomux5ip10): a failed fleet order can carry its failure
+// reason ONLY in the order's own `error` field (a missing access key, or a
+// Claude usage/spending limit). The old probe - headline + needsCeo +
+// verdictReason - did not reach it, and needsCeo is only written when the
+// manager wrote one, so those orders fell through to the generic
+// "Retry this order or drop it?" choice instead of the provide-key item or the
+// Claude-limit item. The RunCard type (runManagers.ts) does not carry the
+// order's error, so the wording is reached through an OPTIONAL lookup the
+// entrypoint registers once (real briefings: fleet.ts getFleetOrder, wired by
+// src/server.ts and by every test/ops entrypoint; tests otherwise read an
+// optional `orderError` field straight off the card, so nothing touches the
+// live company/ folder). The wording only is returned - never a secret value.
+
+/** Where the classifier can read a failed order's own error text from. */
+let orderErrorLookup: ((orderId: string) => string | undefined) | undefined;
+
+/**
+ * Register (or clear with undefined) how the classifier reads a failed order's own
+ * `error` text. Set once at process boot; the implementation must be read-only and
+ * total (return undefined for an unknown order).
+ */
+export function setOrderErrorLookup(fn: ((orderId: string) => string | undefined) | undefined): void {
+  orderErrorLookup = fn;
+}
+
+/** The registered lookup, so other modules read order errors through one seam. */
+export function orderErrorLookupFor(): ((orderId: string) => string | undefined) | undefined {
+  return orderErrorLookup;
+}
+
+/**
+ * The order error text visible for one card ("" when unreachable): an optional
+ * `orderError` field copied onto the card itself wins (hermetic tests/ops may
+ * build cards directly), otherwise the registered boot lookup runs. Guarded: a
+ * throwing lookup can never break a classification.
+ */
+export function orderErrorForCard(card: RunCard): string {
+  if (!card || typeof card !== "object") return "";
+  const direct = (card as { orderError?: unknown }).orderError;
+  if (typeof direct === "string") return direct;
+  const orderId = card.ref?.orderId;
+  if (!orderId || typeof orderErrorLookup !== "function") return "";
+  try {
+    return orderErrorLookup(orderId) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** headline + needsCeo + verdictReason + the failed order's own error (when reachable). */
+export function headlineProbe(card: RunCard): string {
+  return `${card.headline} ${card.needsCeo ?? ""} ${card.verdictReason ?? ""} ${orderErrorForCard(card)}`;
 }
 
 /**
@@ -242,7 +298,7 @@ export function classifyNeed(card: RunCard): ClassifyNeedResult {
     return { need: false };
   }
 
-  const haystack = `${card.headline} ${card.needsCeo ?? ""} ${card.verdictReason ?? ""}`;
+  const haystack = `${headlineProbe(card)}`;
 
   if (MISSING_KEY_RE.test(haystack)) {
     return {
