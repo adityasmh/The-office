@@ -125,12 +125,29 @@ foreach ($s in $Parallel) {
     Start-Sleep -Seconds 3
 }
 Wait-All
+# A worker can end its run after a thought-only turn (no tool call): the process exits cleanly but did
+# nothing. The order asks for docs/overnight/REPORT_<stem>.md, so a missing report means "retry once".
+function Report-Missing([string]$stem) { return (-not (Test-Path (Join-Path $root ($OrderDir + "\REPORT_" + $stem + ".md")))) }
+foreach ($s in $Parallel) {
+    if ($stopped) { break }
+    if (Report-Missing $s -and $queue.ContainsKey($s) -and $queue[$s].state -eq "running") {
+        Log ("no report from " + $s + "; retrying once"); Queue-Set $s "queued" "retry after silent stop"
+        $r = Start-One $s; if ($r -eq $null) { $stopped = $true } else { Wait-All }
+    }
+}
 foreach ($s in $Serial) {
     if ($stopped) { Log ("skipped (budget stop): " + $s); continue }
     Wait-All
     $r = Start-One $s
     if ($r -eq $null) { $stopped = $true; continue }
     Wait-All
+    if (Report-Missing $s) {
+        Log ("no report from " + $s + "; retrying once"); Queue-Set $s "queued" "retry after silent stop"
+        $r = Start-One $s
+        if ($r -eq $null) { $stopped = $true; continue }
+        Wait-All
+        if (Report-Missing $s) { Log ("STILL no report from " + $s + " after one retry; giving up on it"); Queue-Set $s "refused" "no report after a retry" }
+    }
 }
 Log "wave finished; ledger results:"
 $led = Join-Path $root "logs\token-ledger.jsonl"

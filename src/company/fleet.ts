@@ -41,6 +41,23 @@ import { isProtected, loadPolicy } from "./policy.js";
 // is done, failed or awaiting the CEO's approval. notify() never throws and never mutates the
 // order, and every call below is guarded so a webhook can never change an order's state.
 import { notify } from "./notify.js";
+// R1-env-scrub (docs/overnight/ORDER_R1-env-scrub.md): the router opens every fleet terminal, so
+// the generated launcher first blanks the router's own secrets (NAMES only) when the operator arms
+// FLEET_SCRUB_ENV=1. Off by default: with the flag unset launcherScrubLines() returns nothing and
+// the launcher text is byte-for-byte what it was before.
+import { launcherScrubLines } from "./scrubEnv.js";
+// R2-stuck-detector (docs/overnight/ORDER_R2-stuck-detector.md): the watcher tick flags a working
+// work order that burns time or tokens with no progress. Off by default (FLEET_STUCK unset); the
+// pure verdict lives in stuck.ts, the file comparisons and the token read happen here in the tick.
+import { isStuck, stuckEnabled } from "./stuck.js";
+// R3-auto-redo (docs/overnight/ORDER_R3-auto-redo.md): a REDO whose review carries usable notes is
+// retried ONCE automatically, with those notes in the new brief, instead of waiting for the CEO to
+// click "send back". Off by default (FLEET_AUTO_REDO unset); the pure verdict lives in autoRedo.ts
+// and the retry itself is the existing redoWorkOrder() in this file.
+import { autoRedoEnabled, autoRedoMax, shouldAutoRedo } from "./autoRedo.js";
+// R4-agent-mailbox (docs/overnight/ORDER_R4-agent-mailbox.md): the bounded worker mailbox. Off
+// unless FLEET_TALK=1, so every call below is a no-op on the default path.
+import { inboxCommand, readNewMessages, sendCommand, setTraceMark, talkEnabled, traceMark } from "./fleetTalk.js";
 
 // ── FLEET ──────────────────────────────────────────────────────────────
 // "Claude manages, jcode executes": the CEO types an order, Claude (manager)
@@ -120,6 +137,11 @@ export type WorkOrder = {
   modelSwitch?: { ok: boolean; at: string; detail: string };
   // Delivery bookkeeping (not in the spec's type, purely diagnostic).
   delivery?: { how: "targeted" | "focused" | "none"; at: string; detail: string };
+  // ── R2-stuck-detector (docs/overnight/ORDER_R2-stuck-detector.md) ─────
+  /** set by the watcher tick when the work order burns time/tokens with no progress */
+  stuck?: boolean;
+  /** plain-words reason for the stuck flag, carried in the trace hop */
+  stuckReason?: string;
 };
 
 export type FleetOrder = {
@@ -589,7 +611,7 @@ export function sessionIsAlive(sessionId: string): boolean {
   return liveClientSessions().has(sessionId);
 }
 
-type JournalMsg = { role?: string; content?: Array<{ type?: string; text?: string; name?: string; input?: Record<string, unknown> }> };
+type JournalMsg = { role?: string; content?: Array<{ type?: string; text?: string; name?: string; input?: Record<string, unknown> }>; token_usage?: { prompt_tokens?: number; input_tokens?: number; output_tokens?: number; total_tokens?: number } };
 
 export type SessionLive = {
   found: boolean;
@@ -600,6 +622,10 @@ export type SessionLive = {
   tail: string[];
   /** the model the session itself reports (Fix 1: proves Kaya's pick really runs) */
   model?: string;
+  /** R2-stuck-detector: the session's running token total from the journal's token_usage records
+   *  (input+output summed over the messages in the journal tail), or undefined when the journal
+   *  carries none. Read from THIS same journal reader so the stuck check adds no second reader. */
+  tokens?: number;
 };
 
 /** sessionLive memo (see its doc comment): keyed by journal mtime+size+maxLines. */
@@ -676,6 +702,10 @@ export function sessionLive(sessionId: string, maxLines = 15, force = false): Se
   out.streaming = isStreaming(sessionId);
   const lines: string[] = [];
   let count = 0;
+  // R2-stuck-detector: the session's token total, summed from the journal's per-message
+  // token_usage records (input+output). Stays 0 when the journal carries none, and the caller
+  // then falls back to the minutes rule alone.
+  let tokenTotal = 0;
   try {
     for (const rawLine of readTextTail(journal).split("\n")) {
       const line = rawLine.trim();
@@ -691,6 +721,12 @@ export function sessionLive(sessionId: string, maxLines = 15, force = false): Se
       if (rec.meta?.model) out.model = rec.meta.model;
       for (const m of rec.append_messages ?? []) {
         count++;
+        const u = m.token_usage;
+        if (u) {
+          const inTok = typeof u.input_tokens === "number" ? u.input_tokens : typeof u.prompt_tokens === "number" ? u.prompt_tokens : 0;
+          const outTok = typeof u.output_tokens === "number" ? u.output_tokens : 0;
+          if (Number.isFinite(inTok) && Number.isFinite(outTok)) tokenTotal += inTok + outTok;
+        }
         for (const c of m.content ?? []) {
           if (c.type === "text" && m.role === "assistant") {
             const t = (c.text ?? "").trim();
@@ -707,6 +743,7 @@ export function sessionLive(sessionId: string, maxLines = 15, force = false): Se
     // journal unreadable: report what we have
   }
   out.messages = count;
+  if (tokenTotal > 0) out.tokens = tokenTotal;
   out.tail = lines.slice(-maxLines);
   // The model lives in the session snapshot (and in the journal meta once it has
   // run a turn), so read it so the UI can show what the terminal ACTUALLY runs.
@@ -1325,11 +1362,14 @@ export async function launchTarget(model: string | undefined): Promise<{ provide
   return { provider: provider(), model, direct: false, why: plan.why };
 }
 
-async function launcherScript(order: FleetOrder, wo: WorkOrder): Promise<string> {
+export async function launcherScript(order: FleetOrder, wo: WorkOrder): Promise<string> {
   const repo = repoRoot();
   const launch = await launchTarget(wo.model);
   const script = [
     "# fleet worker launcher (generated by src/company/fleet.ts)",
+    // R1-env-scrub: blank the router's secrets before `jcode` starts. Empty by default, and
+    // names only - the lines never carry a value.
+    ...launcherScrubLines("powershell"),
     `$Host.UI.RawUI.WindowTitle = 'fleet ${order.id}/${wo.id}'`,
     `Set-Location -LiteralPath ${psQuote(repo)}`,
     // Fix 1: Laya's model goes on the command line, so the terminal really runs it
@@ -1575,6 +1615,25 @@ function workerPreamble(): string {
   ].join(" ");
 }
 
+/**
+ * The R4-agent-mailbox "Teammates" block, appended to a work order's brief only when FLEET_TALK=1
+ * and the order has two or more work orders. It names the peers, gives the two exact commands
+ * with this work order's ids filled in, and states the two rules (two one-shot inbox reads, and
+ * never wait for an answer). Returns "" when the caller must not show it.
+ */
+function teammatesSection(order: FleetOrder, wo: WorkOrder): string {
+  const peers = order.workOrders.filter((w) => w.id !== wo.id);
+  if (!peers.length) return "";
+  const peer = peers[0];
+  return [
+    `TEAMMATES (order ${order.id} has ${order.workOrders.length} work orders; leave each other short notes on the order board):`,
+    ...peers.map((p) => `  - ${p.id} (role ${p.role}) owns ${p.owns.length ? p.owns.join(", ") : "(no file named)"}`),
+    `  send:  ${sendCommand(order.id, wo.id, peer.id, "note")}`,
+    `  inbox: ${inboxCommand(order.id, wo.id)}`,
+    "  Rules: (1) run `inbox` once at the start and once just before writing REPORT.md, never in a loop; (2) never wait for answer.",
+  ].join("\n");
+}
+
 export function briefBody(order: FleetOrder, wo: WorkOrder, extra?: string): string {
   const report = reportPath(order.id, wo.id);
   return [
@@ -1594,6 +1653,7 @@ export function briefBody(order: FleetOrder, wo: WorkOrder, extra?: string): str
     "",
     "DONE (acceptance checks - all of them):",
     ...wo.done.map((d) => `  - ${d}`),
+    ...(talkEnabled() && order.workOrders.length >= 2 ? ["", teammatesSection(order, wo)] : []),
     ...(wo.review ? ["", "REVIEW NOTES from the previous attempt (a REDO was requested):", wo.review] : []),
     ...(extra ? ["", extra] : []),
     "",
@@ -2875,8 +2935,17 @@ async function fillSlotsNow(opts: { ignoreSlotCaps?: boolean } = {}): Promise<{ 
   return { started, running: runningWorkOrders(loadFleetOrders()).length };
 }
 
-export async function redoWorkOrder(orderId: string, wid: string): Promise<FleetOrder> {
-  const orders = loadFleetOrders();
+export async function redoWorkOrder(
+  orderId: string,
+  wid: string,
+  /**
+   * R3-auto-redo: the watcher passes its OWN in-memory `orders` so an automatic retry mutates the
+   * same objects that pass will save (a fresh load here would be clobbered by that save). `by`
+   * labels the trace hop: the CEO route leaves both at their defaults.
+   */
+  opts: { orders?: FleetOrder[]; by?: string } = {},
+): Promise<FleetOrder> {
+  const orders = opts.orders ?? loadFleetOrders();
   const order = orders.find((o) => o.id === orderId);
   if (!order) throw new Error(`unknown fleet order ${orderId}`);
   const wo = order.workOrders.find((w) => w.id === wid);
@@ -2891,7 +2960,7 @@ export async function redoWorkOrder(orderId: string, wid: string): Promise<Fleet
   wo.error = undefined;
   wo.state = "queued";
   order.status = "running";
-  pushTrace(order, { from: "CEO", to: `jcode:${wid}`, what: "redo", detail: `attempt ${wo.attempts + 1} with the review notes` });
+  pushTrace(order, { from: opts.by ?? "CEO", to: `jcode:${wid}`, what: "redo", detail: `attempt ${wo.attempts + 1} with the review notes` });
   touched(order);
   saveFleetOrders(orders);
   void fillSlots().catch((e) => console.error(`[fleet] spawn after redo failed: ${String(e)}`));
@@ -3077,7 +3146,22 @@ export async function republishWorkOrder(
   return out;
 }
 
-async function reviewWorkOrder(order: FleetOrder, wo: WorkOrder): Promise<void> {
+/**
+ * R3-auto-redo: is the company paused for a planned shutdown? lifecycle.ts imports this module,
+ * so the flag is read through a dynamic import (the same pattern askCeoViaInbox uses for inbox.ts)
+ * instead of a static cycle. A read that somehow fails means "not paused", which is the behaviour
+ * every caller had before this feature existed. Never starts or restarts anything.
+ */
+async function companyPaused(): Promise<boolean> {
+  try {
+    const mod = (await import("./lifecycle.js")) as { paused?: () => boolean };
+    return typeof mod.paused === "function" && mod.paused() === true;
+  } catch {
+    return false;
+  }
+}
+
+async function reviewWorkOrder(order: FleetOrder, wo: WorkOrder, allOrders: FleetOrder[]): Promise<void> {
   if (config.mockMode) {
     wo.verdict = "PASS";
     wo.review = "MOCK_MODE=1: the mock reviewer always passes.";
@@ -3183,6 +3267,10 @@ async function reviewWorkOrder(order: FleetOrder, wo: WorkOrder): Promise<void> 
       verdict = "REDO";
       review = `automated check: ${reportPath(order.id, wo.id)} is missing or empty, so a PASS is not allowed. ${review}`;
     }
+    // R3-auto-redo: `wo.review` still holds the notes the worker was given on the attempt being
+    // graded (redoWorkOrder keeps them). Capture them before the overwrite below so a worker that
+    // repeats the identical failure can be spotted and stopped instead of retried again.
+    const previousReviewText = wo.review ?? "";
     wo.verdict = verdict;
     wo.review = review;
     wo.state = "reviewed";
@@ -3194,6 +3282,45 @@ async function reviewWorkOrder(order: FleetOrder, wo: WorkOrder): Promise<void> 
       what: `review ${verdict}`,
       detail: `${gateLabel}${review}`,
     });
+    // ── R3-auto-redo (docs/overnight/ORDER_R3-auto-redo.md) ──────────────────────────────
+    // A REDO whose review left usable notes is retried ONCE here, without waiting for the CEO to
+    // click "send back": the existing redoWorkOrder below keeps wo.review, so the new session's
+    // brief carries the reviewer's notes (see buildBrief). Off by default: with FLEET_AUTO_REDO
+    // unset this whole block is skipped and the tick is byte-for-byte what it was before.
+    if (verdict === "REDO" && autoRedoEnabled()) {
+      try {
+        const decision = shouldAutoRedo({
+          verdict,
+          attempts: wo.attempts,
+          max: autoRedoMax(),
+          reviewText: review,
+          prevReviewText: previousReviewText,
+          // The automated PASS floor above turns a missing/empty REPORT.md into a REDO whose
+          // "notes" are our own sentence: that is not the worker's failure to retry (a human looks).
+          reason: reportReadable ? "review" : "empty-report",
+          failedCiOnly: false,
+          slotsFree: runningWorkOrders(allOrders).length < maxSessions(),
+          paused: await companyPaused(),
+        });
+        if (decision.redo) {
+          // Reuse the existing redo, against THIS pass's in-memory orders: a fresh load inside
+          // redoWorkOrder would be clobbered by the save at the end of tickFleet().
+          await redoWorkOrder(order.id, wo.id, { orders: allOrders, by: "Fleet" });
+          pushTrace(order, {
+            from: "Fleet",
+            to: `jcode:${wo.id}`,
+            what: `auto redo (attempt ${decision.attempt} of ${decision.max})`,
+            detail: `the reviewer asked for a REDO and left notes; retrying automatically with those notes in the new brief (attempt ${decision.attempt} of ${decision.max})`,
+          });
+        } else {
+          // Say WHY in plain words: a silent stop looks like the feature is broken.
+          pushTrace(order, { from: "Fleet", to: "CEO", what: "auto redo skipped", detail: decision.reason });
+        }
+      } catch (e) {
+        // An automatic retry that fails is not a review failure: say so and leave the REDO stored.
+        pushTrace(order, { from: "Fleet", to: "CEO", what: "auto redo failed", detail: String(e).slice(0, 200) });
+      }
+    }
     // GH-2: a PASS is published as a draft PR when FLEET_GITHUB is on. Never changes the verdict.
     if (verdict === "PASS") await publishPass(order, wo);
   } catch (e) {
@@ -3465,6 +3592,68 @@ function reportNewerThanLastReview(orderId: string, wo: WorkOrder): boolean {
   }
 }
 
+// ── R2-stuck-detector helpers (docs/overnight/ORDER_R2-stuck-detector.md) ──
+
+/** Directories never walked when checking "did anything in the repo change?". */
+const REPO_CHANGE_SKIP_DIRS = new Set([
+  "node_modules", ".git", ".jcode", "dist", "build", ".next", ".cache", "tmp", "coverage",
+]);
+
+/**
+ * Did any file the work order OWNS change after `startedMs`? Compared by modified time; a
+ * missing or unreadable owned path is not evidence of progress. With an EMPTY owned list the
+ * order says to fall back to "no file in the repo changed", so a bounded walk of FLEET_REPO
+ * decides instead. The company root is skipped: orders.json and the trace change every tick
+ * by design, so counting them would hide every stuck worker.
+ */
+function ownedFilesChanged(owns: string[], startedMs: number): boolean {
+  if (!Number.isFinite(startedMs)) return false;
+  const list = (owns ?? []).map((p) => String(p ?? "").trim()).filter(Boolean);
+  if (!list.length) return repoChangedSince(startedMs);
+  for (const p of list) {
+    try {
+      const abs = path.isAbsolute(p) ? p : path.resolve(repoRoot(), p);
+      if (fs.statSync(abs).mtimeMs > startedMs) return true;
+    } catch {
+      // missing or unreadable: not evidence of progress
+    }
+  }
+  return false;
+}
+
+/** Bounded walk of FLEET_REPO: true when any file was modified after `startedMs`. */
+function repoChangedSince(startedMs: number): boolean {
+  const company = path.resolve(getCompanyRoot());
+  const stack: string[] = [repoRoot()];
+  let seen = 0;
+  while (stack.length) {
+    const dir = stack.pop() as string;
+    if (path.resolve(dir) === company) continue;
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      // Bounded: a huge repo must never stall a tick. At the cap we answer "no change".
+      if (++seen > 4000) return false;
+      const abs = path.join(dir, name);
+      try {
+        const st = fs.statSync(abs);
+        if (st.isDirectory()) {
+          if (!REPO_CHANGE_SKIP_DIRS.has(name)) stack.push(abs);
+        } else if (st.mtimeMs > startedMs) {
+          return true;
+        }
+      } catch {
+        // unreadable entry: skip
+      }
+    }
+  }
+  return false;
+}
+
 /** One pass over every live order: advance states, review finished work. */
 export async function tickFleet(): Promise<{ advanced: number; reviewed: number; orders: number }> {
   // The whole pass holds the state lock (it awaits Claude reviews in the middle);
@@ -3509,6 +3698,41 @@ export async function tickFleet(): Promise<{ advanced: number; reviewed: number;
           wo.error = "the worker session is gone and no REPORT.md was written";
           pushTrace(order, { from: `jcode:${wo.id}`, to: "Claude (manager)", what: "worker gone", detail: wo.error });
           settleOrder(order);
+        }
+      }
+      // ── R2-stuck-detector (docs/overnight/ORDER_R2-stuck-detector.md) ──
+      // Flag a work order that is burning time (or tokens) with no progress: no REPORT.md and
+      // no file it owns touched since it started. A FLAG only: never kill, stop or message the
+      // worker. Off by default (FLEET_STUCK unset => stuckEnabled() is false => this is a no-op).
+      if (stuckEnabled()) {
+        const working = RUNNING_STATES.includes(wo.state);
+        const reportExists = fs.existsSync(reportPath(order.id, wo.id));
+        const startedMs = Date.parse(wo.startedAt ?? order.createdAt);
+        const ownedChanged = working ? ownedFilesChanged(wo.owns ?? [], startedMs) : false;
+        // The token total comes from the same session journal reader the tick already uses
+        // (sessionLive). When that journal carries no token_usage this is undefined and the
+        // minutes rule alone decides, exactly as the order requires.
+        const tokens = working && wo.sessionId ? sessionLive(wo.sessionId).tokens : undefined;
+        const verdict = isStuck({
+          startedAt: wo.startedAt ?? order.createdAt,
+          now: Date.now(),
+          tokens,
+          reportExists,
+          ownedChanged,
+          alreadyFlagged: wo.stuck === true,
+        });
+        if (verdict.stuck) {
+          wo.stuck = true;
+          wo.stuckReason = verdict.reason;
+          advanced++;
+          pushTrace(order, { from: "Fleet", to: "CEO", what: "possibly stuck", detail: `${wo.id}: ${verdict.reason}` });
+          // F09 notifier: fire-and-forget and guarded like every other notify() call. It only
+          // actually POSTs when NOTIFY_EVENTS lists "stuck"; adding "stuck" there is the switch.
+          try { void notify("stuck", order).catch(() => undefined); } catch { /* ignore */ }
+        } else if (wo.stuck && (!working || reportExists || ownedChanged)) {
+          // Clear the flag the moment progress appears (a report, or an owned file change).
+          wo.stuck = false;
+          delete wo.stuckReason;
         }
       }
       // A REDO'd work order whose worker reworks ON ITS OWN rewrites REPORT.md, but its state is
@@ -3573,11 +3797,31 @@ export async function tickFleet(): Promise<{ advanced: number; reviewed: number;
           reviewsInFlight.add(key);
           reviewed++;
           try {
-            await reviewWorkOrder(order, wo);
+            await reviewWorkOrder(order, wo, orders);
           } finally {
             reviewsInFlight.delete(key);
           }
         }
+      }
+    }
+    // ── R4-agent-mailbox: one trace hop per NEW board line, exactly once ──
+    // Off unless FLEET_TALK=1. The watermark file beside the board means a restart does not
+    // re-trace lines it already showed; a board read must never break a tick.
+    if (talkEnabled()) {
+      try {
+        const fresh = readNewMessages(order.id, traceMark(order.id));
+        for (const m of fresh) {
+          pushTrace(order, {
+            from: "Fleet",
+            to: "CEO",
+            what: "worker message",
+            detail: `${m.from} -> ${m.to} [${m.kind}] ${m.text.slice(0, 80)}`,
+          });
+          advanced++;
+        }
+        if (fresh.length) setTraceMark(order.id, fresh[fresh.length - 1].id);
+      } catch {
+        // ignore: talk is an add-on and must never fail the fleet pass
       }
     }
     settleOrder(order);

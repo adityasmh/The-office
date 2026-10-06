@@ -31,12 +31,24 @@ export const RELOADABLE_ENV_KEYS = [
   "MAX_PARALLEL_SESSIONS",
   "MIN_FREE_RAM_MB",
   "FLEET_AUTO_APPROVE",
+  // R2-stuck-detector: the flag and its two limits, so they can be armed/disarmed without a restart.
+  "FLEET_STUCK",
+  "FLEET_STUCK_MINUTES",
+  "FLEET_STUCK_TOKENS",
   // F09: the webhook notification settings. The URL is allow-listed like a token: it can carry
   // a secret in its path, on purpose, and reloadEnv never returns or logs a value.
   "NOTIFY_WEBHOOK_URL",
   "NOTIFY_FORMAT",
   "NOTIFY_EVENTS",
   "NOTIFY_DRY_RUN",
+  // R1-env-scrub: arming the fleet-terminal env scrubber, and its extra deny-list names.
+  "FLEET_SCRUB_ENV",
+  "FLEET_SCRUB_EXTRA",
+  // R3-auto-redo: the one automatic retry after a REDO that left notes, and its cap.
+  "FLEET_AUTO_REDO",
+  "FLEET_AUTO_REDO_MAX",
+  // R4-agent-mailbox: turn the bounded worker mailbox on/off without a restart (default off).
+  "FLEET_TALK",
 ] as const;
 
 export type ReloadEnvResult = {

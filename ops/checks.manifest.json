@@ -352,5 +352,35 @@
         "name":  "policy",
         "network":  false,
         "timeoutSec":  120
+    },
+    {
+        "name":  "scrub-env",
+        "command":  "npx tsx ops/scrub-env-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "stuck",
+        "command":  "npx tsx ops/stuck-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "auto-redo",
+        "command":  "npx tsx ops/auto-redo-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "agent-talk",
+        "command":  "npx tsx ops/agent-talk-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "web-read",
+        "command":  "npx tsx ops/web-read-check.ts",
+        "network":  false,
+        "timeoutSec":  120
     }
 ]
