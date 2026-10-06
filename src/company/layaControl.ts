@@ -3,7 +3,8 @@
  *
  * The System page's "Laya (decision model)" panel (public/v2/views/system.js) gets its
  * data and its two mutations from here:
- *   - `layaStatus()`   -> health + device + the process table's Laya pids + GPU memory;
+ *   - `layaStatus()`   -> health + device + the process table's Laya pids + GPU memory + the
+ *                         programs holding GPU memory by plain label (ORDER U2);
  *   - `stopLaya()`     -> stops ONLY python.exe running `laya.serve` / `laya-gpu-boot.py`
  *                         (the same rule ops/laya-restart.ps1 follows: never the router,
  *                         never jcode, never an unrelated python), then reports freed VRAM;
@@ -46,6 +47,10 @@ const SWITCH_STOP_WAIT_MS = 15_000; // how long a switch waits for health to go 
 const LOG_TAIL_LINES = 5;
 const LOG_TAIL_CHARS = 600;
 const LAYA_NEEDS_MIB = 4 * 1024; // "Laya needs about 4 GB"
+// ORDER U2 knobs: a GPU user below the first number is noise; another program above the
+// second stands between Laya and the GPU when Laya is on the CPU (see gpuUsersNotice()).
+const GPU_USER_MIN_MIB = 20;
+const GPU_USER_HEAVY_MIB = 1024;
 
 function layaHealthUrl(): string {
   const raw = (process.env.LAYA_HEALTH_URL ?? "").trim();
@@ -87,6 +92,87 @@ export function setPendingStartForTests(value: { device: LayaDevice; at: number 
 /** Test seam only: what is currently remembered (used by the proof). */
 export function getPendingStartForTests(): PendingStart | null {
   return pendingStart ? { ...pendingStart } : null;
+}
+
+// ── the last control action (ORDER U1) ───────────────────────────────────────
+//
+// The CEO switched Laya to CPU and the panel still showed "GPU 3.0 GB used", with nothing
+// saying a control action had just happened. We keep the last start/stop/switch action here
+// (in memory, replaced by the next one) so `layaStatus()` can hand the panel a plain-words
+// record of what the user last asked for, whether it worked, and why it did not.
+
+export type LayaControlAction = {
+  kind: "start" | "stop" | "switch";
+  device: LayaDevice;
+  /** ISO time the action finished */
+  at: string;
+  ok: boolean;
+  /** failure reason, or a short note about a success */
+  note?: string;
+};
+
+let lastAction: LayaControlAction | null = null;
+
+function recordAction(action: LayaControlAction): void {
+  const note = oneLine(action.note ?? "");
+  lastAction = { ...action, ...(note ? { note } : {}) };
+}
+
+/** Test seam only: set (or clear) the remembered action so the proof starts from a clean slate. */
+export function setLastActionForTests(value: LayaControlAction | null): void {
+  lastAction = value ? { ...value } : null;
+}
+/** Test seam only: what is currently remembered (used by the proof). */
+export function getLastActionForTests(): LayaControlAction | null {
+  return lastAction ? { ...lastAction } : null;
+}
+
+/** "15:02" for an ISO timestamp (local time), "" when it does not parse. */
+function clockHm(iso: string): string {
+  const d = new Date(String(iso ?? ""));
+  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function sizeWord(mib: number): string {
+  const v = Math.max(0, Math.round(Number(mib) || 0));
+  return v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${v} MB`;
+}
+
+/**
+ * One plain sentence for the GPU memory bar (ORDER U1 item 2a). Pure. When Laya runs on the
+ * CPU the bar is everyone else's memory and must say so; when Laya's own share is known it
+ * says "Laya uses X of Y"; when Windows does not report the share it says so.
+ */
+export function gpuBarLabel(
+  input: { device?: string | null; layaGpuMiB?: number | null; totalMiB?: number | null } = {},
+): string {
+  const kind = deviceOf({ device: input?.device ?? undefined });
+  const own = typeof input?.layaGpuMiB === "number" && Number.isFinite(input.layaGpuMiB) ? input.layaGpuMiB : null;
+  if (kind === "cpu") return "GPU memory used by other programs (Laya is on the CPU, so none of this is Laya)";
+  if (own === null) return "Laya's own share is not reported by Windows, the bar shows total GPU use";
+  const total = typeof input?.totalMiB === "number" && Number.isFinite(input.totalMiB) && input.totalMiB > 0
+    ? input.totalMiB
+    : null;
+  return total === null ? `Laya uses ${sizeWord(own)}` : `Laya uses ${sizeWord(own)} of ${sizeWord(total)}`;
+}
+
+/** One plain sentence for the last control action (ORDER U1 item 2b), or null when there is none. */
+export function lastActionText(
+  action: LayaControlAction | null | undefined,
+  opts: { hm?: (iso: string) => string } = {},
+): string | null {
+  if (!action) return null;
+  const word = deviceWord(action.device);
+  const at = (opts.hm ?? clockHm)(action.at);
+  const when = at ? `at ${at}` : "just now";
+  const note = oneLine(action.note ?? "");
+  if (action.ok) {
+    if (action.kind === "switch") return `Switched to ${word} ${when} (Laya is now answering on ${word})`;
+    if (action.kind === "start") return `Started on ${word} ${when}${note ? ` (${note})` : ""}`;
+    return `Stopped Laya ${when}${note ? ` (${note})` : ""}`;
+  }
+  const what = action.kind === "switch" ? `Switch to ${word}` : action.kind === "start" ? `Start on ${word}` : "Stop";
+  return `${what} failed ${when}${note ? `: ${note}` : ""}`;
 }
 
 export function deviceWord(device: string | null | undefined): string {
@@ -198,10 +284,10 @@ export function cpuFallbackNotice(input: FallbackInput | null | undefined): stri
 // ── the process list Laya is identified from ─────────────────────────────────
 
 /** One row of the process table, as `Get-CimInstance Win32_Process` reports it. */
-export type ProcInput = { pid: number; name: string; commandLine: string };
+export type ProcInput = { pid: number; name: string; commandLine: string; created?: string };
 
 function procsFromTable(table: ProcMap): ProcInput[] {
-  return [...table.values()].map((r) => ({ pid: r.pid, name: r.name, commandLine: r.cmd }));
+  return [...table.values()].map((r) => ({ pid: r.pid, name: r.name, commandLine: r.cmd, created: r.created }));
 }
 
 /**
@@ -333,6 +419,150 @@ async function gpuUsedMiB(exec: ExecFn): Promise<number | null> {
   return gpu ? gpu.usedMiB : null;
 }
 
+// ── which programs hold GPU memory, by name (ORDER U2) ───────────────────────
+//
+// The panel's GPU bar showed 3 GB used while Laya sat on the CPU and nothing said who held it
+// (it was the voice text-to-speech worker). `gpuUsers()` answers that by name: per-process
+// dedicated GPU memory from the Windows counter, each pid mapped to its process name and a
+// plain label. A label is only ever a short plain phrase - a command line never leaves here.
+
+export type GpuUser = { pid: number; name: string; label: string; mb: number };
+export type GpuUsersResult = { users: GpuUser[]; reason: string | null };
+
+/** Per-process DEDICATED (not shared) GPU memory, in bytes; nothing user-supplied is passed. */
+const GPU_COUNTER_ARGS = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "(Get-Counter '\\GPU Process Memory(*)\\Dedicated Usage' -ErrorAction Stop).CounterSamples | " +
+    'ForEach-Object { "$($_.InstanceName) $($_.CookedValue)" }',
+];
+
+/**
+ * The rows of a real or fake counter reading: lines naming an instance `pid_<number>_...` and,
+ * on the same line or the next, its byte value. Sizes are summed per pid and anything at or
+ * below 20 MB is dropped. Malformed lines are skipped; this never throws.
+ */
+export function parseGpuCounter(stdout: string): Array<{ pid: number; mb: number }> {
+  const bytes = new Map<number, number>();
+  let pending: number | null = null;
+  for (const raw of String(stdout ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const named = /pid_(\d+)_/i.exec(line);
+    if (named) {
+      const pid = Number(named[1]);
+      pending = Number.isFinite(pid) && pid > 0 ? pid : null;
+      if (pending !== null) {
+        // A value on the same line (space- or comma-separated) must look like bytes, not the
+        // trailing digit of an instance name (`..._phys_0`); tiny values are dropped anyway.
+        const tail = /([0-9]+(?:\.[0-9]+)?)\s*"?\s*$/.exec(line);
+        const v = tail ? Number(tail[1]) : NaN;
+        if (Number.isFinite(v) && v >= 1_048_576) {
+          bytes.set(pending, (bytes.get(pending) ?? 0) + v);
+          pending = null;
+        }
+      }
+      continue;
+    }
+    if (pending !== null) {
+      const solo = /^([0-9]+(?:\.[0-9]+)?)$/.exec(line);
+      if (solo) {
+        bytes.set(pending, (bytes.get(pending) ?? 0) + Number(solo[1]));
+        pending = null;
+      }
+    }
+  }
+  const out: Array<{ pid: number; mb: number }> = [];
+  for (const [pid, b] of bytes) {
+    if (!(b > GPU_USER_MIN_MIB * 1_048_576)) continue;
+    out.push({ pid, mb: Math.round((b / 1_048_576) * 10) / 10 });
+  }
+  out.sort((a, b) => b.mb - a.mb || a.pid - b.pid);
+  return out;
+}
+
+/**
+ * A plain label for one GPU-holding process. Only the process name and, for a python process,
+ * three well-known command-line words are looked at; the command line itself is never returned.
+ */
+export function gpuUserLabel(name: string, commandLine: string): string {
+  const proc = String(name ?? "").trim();
+  const cmd = String(commandLine ?? "").toLowerCase();
+  if (/^python(\.exe)?$/i.test(proc)) {
+    if (cmd.includes("laya")) return "Laya";
+    if (cmd.includes("tts")) return "Voice, text to speech";
+    if (cmd.includes("stt")) return "Voice, speech to text";
+  }
+  return proc || "unknown";
+}
+
+/**
+ * Which programs hold GPU memory: `[{pid, name, label, mb}]`, biggest first, newest-first on a
+ * tie. `exec` is injectable so the proof can feed fake counter output. When the counter cannot
+ * be read this returns an empty list plus a short reason - never an error, never a throw.
+ */
+export async function gpuUsers(exec: ExecFn = runCommand, processes?: ProcInput[]): Promise<GpuUsersResult> {
+  let res: CmdResult;
+  try {
+    res = await exec("powershell", GPU_COUNTER_ARGS, GPU_TIMEOUT_MS);
+  } catch (e) {
+    const why = oneLine(String(e));
+    return { users: [], reason: why ? clip(why, 160) : "the Windows GPU counter is not available" };
+  }
+  if (!res.ok) {
+    const why = oneLine(res.stderr || res.error || "");
+    return { users: [], reason: why ? clip(why, 160) : "the Windows GPU counter is not available" };
+  }
+  let list = processes;
+  if (!list) {
+    try {
+      list = procsFromTable(await snapshotProcessesAsync(true));
+    } catch {
+      list = [];
+    }
+  }
+  const byPid = new Map<number, ProcInput>();
+  for (const row of list ?? []) {
+    const pid = Number(row?.pid);
+    if (Number.isFinite(pid) && pid > 0) byPid.set(pid, row);
+  }
+  const rows: Array<GpuUser & { created: number }> = [];
+  for (const entry of parseGpuCounter(res.stdout)) {
+    const row = byPid.get(entry.pid);
+    const name = String(row?.name ?? "").trim() || "unknown";
+    const created = row && row.created ? Date.parse(row.created) : NaN;
+    rows.push({
+      pid: entry.pid,
+      name,
+      label: gpuUserLabel(name, row ? row.commandLine : ""),
+      mb: entry.mb,
+      created: Number.isFinite(created) ? created : 0,
+    });
+  }
+  // Biggest first; on a tie the newest process (latest start time) comes first.
+  rows.sort((a, b) => b.mb - a.mb || b.created - a.created || b.pid - a.pid);
+  return { users: rows.map(({ pid, name, label, mb }) => ({ pid, name, label, mb })), reason: null };
+}
+
+/** "Voice, text to speech (python, pid 6668): 2.9 GB" - one panel line for one GPU user. */
+export function gpuUserLine(user: GpuUser): string {
+  const name = String(user?.name ?? "").replace(/\.exe$/i, "") || "unknown";
+  const label = String(user?.label ?? "").trim() || name;
+  return `${label} (${name}, pid ${Number(user?.pid) || 0}): ${sizeWord(Number(user?.mb) || 0)}`;
+}
+
+/**
+ * ORDER U2 item 3: when Laya is on the CPU and some OTHER program keeps more than 1 GB of GPU
+ * memory, one plain sentence about what has to happen. Description only: the panel never offers
+ * a button that stops another program, and a Laya-only list never produces the sentence.
+ */
+export function gpuUsersNotice(device: string | null | undefined, users: GpuUser[] | undefined): string | null {
+  if (deviceOf({ device: device ?? undefined }) !== "cpu") return null;
+  const heavy = (users ?? []).some((u) => u && u.label !== "Laya" && Number(u.mb) > GPU_USER_HEAVY_MIB);
+  return heavy ? "To give Laya the GPU, this program has to stop or restart first" : null;
+}
+
 // ── status ───────────────────────────────────────────────────────────────────
 
 export type LayaStatus = {
@@ -344,6 +574,10 @@ export type LayaStatus = {
   pids: number[];
   gpu: GpuInfo | null;
   layaGpuMiB: number | null;
+  /** Which programs hold GPU memory, by plain label, biggest first (ORDER U2). */
+  gpuUsers: GpuUser[];
+  /** Why `gpuUsers` is empty, when the Windows counter could not be read (ORDER U2), else null. */
+  gpuUsersReason: string | null;
   /** The device the last start asked for, kept so the panel can spot a CPU fallback. */
   requestedDevice: LayaDevice | null;
   /** A start was requested, a Laya process exists, but health does not answer yet. */
@@ -355,6 +589,8 @@ export type LayaStatus = {
   gpuHeadroom: string | null;
   /** Plain-words notice when a checkpoint fell back to CPU (item 5), else null. */
   fallbackNotice: string | null;
+  /** The last control action (start/stop/switch) and whether it worked; null when none yet. */
+  lastAction: LayaControlAction | null;
 };
 
 export type LayaDeps = {
@@ -394,6 +630,7 @@ export async function layaStatus(deps: LayaDeps = {}): Promise<LayaStatus> {
   const list = deps.processes ? await deps.processes() : procsFromTable(await snapshotProcessesAsync(true));
   const pids = layaPids(list);
   const { gpu, layaGpuMiB } = await readGpu(exec, pids);
+  const gpuUsersResult = await gpuUsers(exec, list);
   const json = health.json;
   const checkpointDevices = deviceNames(json);
   const cpuFallbacks = fallbackCounts(json);
@@ -422,11 +659,14 @@ export async function layaStatus(deps: LayaDeps = {}): Promise<LayaStatus> {
     pids,
     gpu,
     layaGpuMiB,
+    gpuUsers: gpuUsersResult.users,
+    gpuUsersReason: gpuUsersResult.reason,
     requestedDevice,
     starting,
     lastStartError,
     gpuHeadroom: gpuHeadroomWarning(gpu),
     fallbackNotice: cpuFallbackNotice({ requestedDevice, checkpointDevices, cpuFallbacks }),
+    lastAction: lastAction ? { ...lastAction } : null,
   };
 }
 
@@ -445,6 +685,7 @@ export async function stopLaya(deps: LayaDeps = {}): Promise<StopResult> {
   const list = deps.processes ? await deps.processes() : procsFromTable(await snapshotProcessesAsync(true));
   const pids = layaPids(list);
   const before = await gpuUsedMiB(exec);
+  let seenDevice: LayaDevice | null = null;
   for (const pid of pids) {
     try {
       process.kill(pid, "SIGKILL");
@@ -455,11 +696,21 @@ export async function stopLaya(deps: LayaDeps = {}): Promise<StopResult> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     const h = await (deps.health ? deps.health() : fetchHealth(1200));
+    const d = deviceOf(h.json);
+    if (d) seenDevice = d;
     if (!h.ok) break;
     await sleep(500);
   }
   const after = await gpuUsedMiB(exec);
   const freedMiB = before !== null && after !== null ? Math.max(0, before - after) : 0;
+  // ORDER U1 item 1: remember what was asked, and that it finished, for the panel.
+  recordAction({
+    kind: "stop",
+    device: seenDevice ?? "gpu",
+    at: new Date().toISOString(),
+    ok: true,
+    ...(pids.length ? {} : { note: "no Laya process was running" }),
+  });
   return { stopped: pids, freedMiB };
 }
 
@@ -475,17 +726,31 @@ export type StartDeps = {
 
 export async function startLaya(opts: { device: "gpu" | "cpu" } & StartDeps): Promise<StartResult> {
   if (opts.device !== "gpu" && opts.device !== "cpu") {
-    return { started: false, refused: true, reason: 'device must be "gpu" or "cpu"' };
+    const reason = 'device must be "gpu" or "cpu"';
+    recordAction({ kind: "start", device: "gpu", at: new Date().toISOString(), ok: false, note: reason });
+    return { started: false, refused: true, reason };
   }
   const health = await (opts.health ? opts.health() : fetchHealth());
   if (health.ok) {
     pendingStart = null;
-    return { started: false, refused: true, reason: "Laya is already answering on :8000" };
+    const reason = "Laya is already answering on :8000";
+    recordAction({ kind: "start", device: opts.device, at: new Date().toISOString(), ok: false, note: reason });
+    return { started: false, refused: true, reason };
   }
-  const pid = await (opts.spawn ? opts.spawn(opts.device) : spawnLaya(opts.device));
+  let pid: number;
+  try {
+    pid = await (opts.spawn ? opts.spawn(opts.device) : spawnLaya(opts.device));
+  } catch (e) {
+    recordAction({
+      kind: "start", device: opts.device, at: new Date().toISOString(), ok: false,
+      note: clip(oneLine(String(e)), 200),
+    });
+    throw e;
+  }
   // Remember the request: while this exists and health is silent, layaStatus() reports
   // `starting` (process alive) or `lastStartError` (process gone past the grace period).
   pendingStart = { device: opts.device, at: Date.now() };
+  recordAction({ kind: "start", device: opts.device, at: new Date().toISOString(), ok: true });
   return { started: true, ...(pid > 0 ? { pid } : {}) };
 }
 
@@ -520,12 +785,23 @@ export type SwitchDeps = {
  */
 export async function switchLaya(opts: { device?: LayaDevice } & SwitchDeps = {}): Promise<SwitchResult> {
   const health = opts.health ?? (() => fetchHealth());
+  // ORDER U1 item 1: every exit from a switch records what happened, for the panel.
+  const done = (result: SwitchResult): SwitchResult => {
+    recordAction({
+      kind: "switch",
+      device: result.to,
+      at: new Date().toISOString(),
+      ok: result.switched,
+      ...(result.switched ? {} : { note: result.reason ?? "" }),
+    });
+    return result;
+  };
   const before = await health();
   const from = deviceOf(before.json);
   const to: LayaDevice = from === "cpu" ? "gpu" : from === "gpu" ? "cpu" : (opts.device === "cpu" ? "cpu" : "gpu");
 
   if (from !== null && opts.device && opts.device !== to) {
-    return { switched: false, from, to, stopped: [], reason: `Laya is already on ${deviceWord(opts.device)}` };
+    return done({ switched: false, from, to, stopped: [], reason: `Laya is already on ${deviceWord(opts.device)}` });
   }
 
   let stopped: number[] = [];
@@ -533,11 +809,11 @@ export async function switchLaya(opts: { device?: LayaDevice } & SwitchDeps = {}
     const r = await (opts.stop ? opts.stop() : stopLaya());
     stopped = Array.isArray(r?.stopped) ? r.stopped : [];
   } catch (e) {
-    return {
+    return done({
       switched: false, from, to, stopped,
       failedAt: "stop",
       reason: `Laya could not be stopped (${clip(oneLine(String(e)), 200)}). Nothing was started.`,
-    };
+    });
   }
 
   const waitMs = opts.waitMs ?? SWITCH_STOP_WAIT_MS;
@@ -550,22 +826,22 @@ export async function switchLaya(opts: { device?: LayaDevice } & SwitchDeps = {}
   }
   if (!down) {
     const waited = waitMs >= 10_000 ? String(Math.round(waitMs / 1000)) : (waitMs / 1000).toFixed(1);
-    return {
+    return done({
       switched: false, from, to, stopped,
       failedAt: "wait",
       reason: `Laya was stopped but is still answering after ${waited} seconds, so it was not started on ${deviceWord(to)}.`,
-    };
+    });
   }
 
   const started = await (opts.start ? opts.start(to) : startLaya({ device: to, health }));
   if (!started.started) {
-    return {
+    return done({
       switched: false, from, to, stopped,
       failedAt: "start",
       reason: started.reason ?? `Laya was stopped but could not be started on ${deviceWord(to)}.`,
-    };
+    });
   }
-  return { switched: true, from, to, stopped };
+  return done({ switched: true, from, to, stopped });
 }
 
 /**

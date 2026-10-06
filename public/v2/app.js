@@ -43,6 +43,9 @@ const $company = document.getElementById("company-name");
  * it tells the CEO something: how much needs them, how many projects, how many
  * tasks in flight, how many agents running. */
 const VIEWS = [
+  // START (docs/business/PLAN.md, Offer A): the first-run page for a non-expert,
+  // so it is the FIRST item. Icon is an escape, so this line stays pure ASCII.
+  { name: "start", label: "Start here", icon: "\u25b6", badge: null },
   { name: "briefing", label: "Briefing", icon: "◈", badge: "needs" },
   { name: "assistant", label: "Assistant", icon: "✦", badge: null },
   { name: "projects", label: "Projects", icon: "▦", badge: "projects" },

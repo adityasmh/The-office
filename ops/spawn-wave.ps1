@@ -26,6 +26,21 @@ Set-Location $root
 $logFile = Join-Path $root "logs\overnight.log"
 function Log([string]$m) { $line = "[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $m; Add-Content -Path $logFile -Value $line -Encoding utf8; Write-Output $line }
 
+# A registry entry is "alive" only if the process exists AND started within 3 minutes of the time the
+# worker was registered. Windows reuses process ids, so a bare pid check counts unrelated programs.
+function Entry-Alive($e) {
+    try {
+        if (-not $e.pid) { return $false }
+        $proc = Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue
+        if (-not $proc) { return $false }
+        if ($e.startedAt) {
+            $reg = [datetime]$e.startedAt
+            $st = $proc.StartTime
+            if ($st -gt $reg.AddMinutes(3) -or $st -lt $reg.AddMinutes(-3)) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
 function Go-Pct {
     try {
         $p = (Invoke-WebRequest -Uri "http://127.0.0.1:8787/company/routing/policy" -TimeoutSec 8 -UseBasicParsing).Content | ConvertFrom-Json
@@ -40,7 +55,7 @@ function Live-Count {
     $n = 0
     foreach ($l in [System.IO.File]::ReadAllLines($reg)) {
         if ($l.Trim() -eq "") { continue }
-        try { $e = $l | ConvertFrom-Json; if ($e.pid -and (Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue)) { $n++ } } catch { }
+        try { $e = $l | ConvertFrom-Json; if (Entry-Alive $e) { $n++ } } catch { }
     }
     return $n
 }
@@ -58,7 +73,7 @@ function Registry-Pid([string]$name) {
     $found = $null
     foreach ($l in [System.IO.File]::ReadAllLines($reg)) {
         if ($l.Trim() -eq "") { continue }
-        try { $e = $l | ConvertFrom-Json; if ([string]$e.name -eq $name -and $e.pid -and (Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue)) { $found = [int]$e.pid } } catch { }
+        try { $e = $l | ConvertFrom-Json; if ([string]$e.name -eq $name -and (Entry-Alive $e)) { $found = [int]$e.pid } } catch { }
     }
     return $found
 }
@@ -86,7 +101,7 @@ $seedReg = Join-Path $root "logs\workers.json"
 if (Test-Path $seedReg) {
     foreach ($l in [System.IO.File]::ReadAllLines($seedReg)) {
         if ($l.Trim() -eq "") { continue }
-        try { $e = $l | ConvertFrom-Json; if ($e.pid -and (Get-Process -Id ([int]$e.pid) -ErrorAction SilentlyContinue)) { $started[[string]$e.name] = [int]$e.pid } } catch { }
+        try { $e = $l | ConvertFrom-Json; if (Entry-Alive $e) { $started[[string]$e.name] = [int]$e.pid } } catch { }
     }
 }
 function Start-One([string]$stem) {

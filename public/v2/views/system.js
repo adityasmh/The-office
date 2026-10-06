@@ -32,7 +32,7 @@
 //   GET  /company/laya                     { ok, device, checkpointDevices, cpuFallbacks,
 //                                             pids, gpu, layaGpuMiB, requestedDevice,
 //                                             starting, lastStartError, gpuHeadroom,
-//                                             fallbackNotice }
+//                                             fallbackNotice, gpuUsers, gpuUsersReason }
 //   POST /company/laya/stop                stop ONLY Laya's python processes
 //   POST /company/laya/start               { device: "gpu" | "cpu" }
 //   POST /company/laya/switch              { device } - stop, wait for health down, then start
@@ -101,6 +101,51 @@ function fmtElapsed(sec) {
   const m = Math.floor(s / 60);
   const r = s % 60;
   return (m < 10 ? "0" : "") + m + ":" + (r < 10 ? "0" : "") + r;
+}
+
+// ORDER U1 (a) and (b): plain words for the GPU memory bar and for the last control action.
+// These mirror gpuBarLabel()/lastActionText() in src/company/layaControl.ts (which the proof
+// tests); this file runs in the browser and cannot import the server module.
+function gpuBarText(L) {
+  const raw = L && L.device ? String(L.device) : "";
+  const kind = /cuda|gpu|nvidia/i.test(raw) ? "gpu" : /cpu/i.test(raw) ? "cpu" : null;
+  const own = L && typeof L.layaGpuMiB === "number" && isFinite(L.layaGpuMiB) ? L.layaGpuMiB : null;
+  if (kind === "cpu") return "GPU memory used by other programs (Laya is on the CPU, so none of this is Laya)";
+  if (own === null) return "Laya's own share is not reported by Windows, the bar shows total GPU use";
+  const total = L && L.gpu && typeof L.gpu.totalMiB === "number" && isFinite(L.gpu.totalMiB) && L.gpu.totalMiB > 0 ? L.gpu.totalMiB : null;
+  return total === null ? "Laya uses " + mb(own) : "Laya uses " + mb(own) + " of " + mb(total);
+}
+function lastActionWords(a, hmFn) {
+  if (!a) return "";
+  const word = deviceWord(a.device);
+  let at = "";
+  try { at = a.at && hmFn ? hmFn(a.at) : ""; } catch { at = ""; }
+  const when = at ? "at " + at : "just now";
+  const note = String(a.note || "").trim();
+  if (a.ok) {
+    if (a.kind === "switch") return "Switched to " + word + " " + when + " (Laya is now answering on " + word + ")";
+    if (a.kind === "start") return "Started on " + word + " " + when + (note ? " (" + note + ")" : "");
+    return "Stopped Laya " + when + (note ? " (" + note + ")" : "");
+  }
+  const what = a.kind === "switch" ? "Switch to " + word : a.kind === "start" ? "Start on " + word : "Stop";
+  return what + " failed " + when + (note ? ": " + note : "");
+}
+
+// ORDER U2: the GPU bar now names the programs holding memory. These mirror gpuUserLine() and
+// gpuUsersNotice() in src/company/layaControl.ts (which the proof tests; this file runs in the
+// browser and cannot import the server module). Description only: there is no button here that
+// stops another program.
+function gpuUserLineText(u) {
+  const name = String((u && u.name) || "").replace(/\.exe$/i, "") || "unknown";
+  const label = String((u && u.label) || "").trim() || name;
+  return label + " (" + name + ", pid " + (Number(u && u.pid) || 0) + "): " + mb(u && u.mb);
+}
+function gpuUsersNoticeText(device, users) {
+  const raw = String(device || "");
+  const kind = /cuda|gpu|nvidia/i.test(raw) ? "gpu" : /cpu/i.test(raw) ? "cpu" : null;
+  if (kind !== "cpu") return "";
+  const heavy = (users || []).some((u) => u && u.label !== "Laya" && Number(u.mb) > 1024);
+  return heavy ? "To give Laya the GPU, this program has to stop or restart first" : "";
 }
 
 function countsLine(c) {
@@ -174,6 +219,8 @@ export function mount(el, ctx) {
   let layaError = "";
   let layaNote = "";
   let layaStartAt = 0; // local clock for "Elapsed mm:ss" while a start is in progress
+  let layaClickAt = 0; // ORDER U1 (c): when the last start/switch click sent its request
+  let layaClickFrom = ""; // the raw device the panel showed at that moment
   let offAt = 0;
   try { offAt = Number(localStorage.getItem(LS_OFF) || 0); } catch { offAt = 0; }
 
@@ -265,9 +312,7 @@ export function mount(el, ctx) {
       const total = Number(L.gpu.totalMiB) || 0;
       const used = Number(L.gpu.usedMiB) || 0;
       const pct = total > 0 ? Math.min(100, Math.max(0, Math.round((used / total) * 100))) : 0;
-      const share = L.layaGpuMiB === null || L.layaGpuMiB === undefined
-        ? "Laya's own share: unknown"
-        : "Laya's own share: " + mb(L.layaGpuMiB);
+      const share = gpuBarText(L);
       gpuRows =
         '<div class="sys-row"><span>' + esc(L.gpu.name) + "</span>" +
         '<span class="muted">' + esc(mb(used) + " / " + mb(total) + " used") + "</span></div>" +
@@ -277,9 +322,31 @@ export function mount(el, ctx) {
       gpuRows = '<div class="muted">GPU memory unavailable (nvidia-smi not found).</div>';
     }
 
+    // ORDER U2: who is holding the GPU memory, one line per program, and (only when Laya is on
+    // the CPU and another program keeps more than 1 GB) one sentence about what has to happen.
+    // Description only: nothing here offers to stop another program.
+    const users = Array.isArray(L.gpuUsers) ? L.gpuUsers : [];
+    const userLines = users.map((u) => '<div class="muted sys-mono">' + esc(gpuUserLineText(u)) + "</div>").join("");
+    const usersNotice = gpuUsersNoticeText(L.device, users);
+    const usersReason = !users.length && L.gpuUsersReason
+      ? '<div class="muted">' + esc("GPU users unavailable: " + L.gpuUsersReason) + "</div>"
+      : "";
+
     // Item 4: the headroom line only matters when a GPU start or a switch to GPU is on offer.
     const gpuActionOffered = !ok || dev === "CPU";
     const headroom = gpuActionOffered && L.gpuHeadroom ? '<div class="sys-warn">' + esc(L.gpuHeadroom) + "</div>" : "";
+
+    // ORDER U1 (b): the last action stays visible until the next one, in plain words.
+    const lastWords = lastActionWords(L.lastAction, hm);
+    // ORDER U1 (c): after a click, if the device has not changed and nothing is starting
+    // 20 s later, say so in the warning colour, with the reason from the last action.
+    if (layaClickAt > 0 && (starting || ((laya && laya.device) || "") !== layaClickFrom)) layaClickAt = 0;
+    const stale = layaClickAt > 0 && !starting && (Date.now() - layaClickAt) > 20000 &&
+      ((laya && laya.device) || "") === layaClickFrom;
+    const staleReason = L.lastAction
+      ? (String(L.lastAction.note || "").trim() || lastActionWords(L.lastAction, hm))
+      : "no Laya action has been recorded yet";
+    const staleLine = stale ? '<div class="sys-warn">Nothing changed yet: ' + esc(staleReason) + "</div>" : "";
 
     // Items 1 and 2: exactly the buttons the current state allows (item 7: busy state per button).
     const off = layaBusy ? " disabled" : "";
@@ -311,10 +378,15 @@ export function mount(el, ctx) {
       '<span class="muted">pids: ' + esc(pids) + "</span>" +
       '<span class="muted">checkpoints: ' + esc(loaded) + "</span>" +
       "</div>" +
+      (lastWords ? '<div class="muted">Last action: ' + esc(lastWords) + "</div>" : "") +
       gpuRows +
+      userLines +
+      (usersNotice ? '<div class="sys-warn">' + esc(usersNotice) + "</div>" : "") +
+      usersReason +
       headroom +
       (L.fallbackNotice ? '<div class="sys-warn">' + esc(L.fallbackNotice) + "</div>" : "") +
       stateLine +
+      staleLine +
       '<div class="sys-row" style="margin-top:8px">' + buttons + "</div>" +
       (layaBusy ? '<div class="muted">Working…</div>' : "") +
       (layaNote ? '<div class="muted">' + esc(layaNote) + "</div>" : "") +
@@ -532,10 +604,12 @@ export function mount(el, ctx) {
       await loadLaya();
     } catch (e) {
       layaError = "Could not stop Laya: " + msg(e);
+    } finally {
+      // ORDER U1 (d): a failed request must re-enable the buttons, not leave them stuck on "Working…".
+      layaBusy = false;
+      layaBusyAct = "";
+      render();
     }
-    layaBusy = false;
-    layaBusyAct = "";
-    render();
     startLayaWatch();
   }
 
@@ -545,7 +619,9 @@ export function mount(el, ctx) {
     layaBusy = true;
     layaBusyAct = "start-" + device;
     layaError = "";
-    layaNote = "Starting Laya on " + deviceWord(device) + ". Loading models, usually 1 to 7 minutes.";
+    layaClickAt = Date.now(); // ORDER U1 (c): the immediate line + the 20 s nothing-changed check
+    layaClickFrom = (laya && laya.device) || "";
+    layaNote = "Starting on " + deviceWord(device) + "... this takes up to a few minutes while the models load.";
     render();
     try {
       const r = await api("/company/laya/start", { method: "POST", body: { device: device } });
@@ -556,10 +632,12 @@ export function mount(el, ctx) {
       await loadLaya();
     } catch (e) {
       layaError = "Could not start Laya: " + msg(e);
+    } finally {
+      // ORDER U1 (d): a failed request must re-enable the buttons, not leave them stuck on "Working…".
+      layaBusy = false;
+      layaBusyAct = "";
+      render();
     }
-    layaBusy = false;
-    layaBusyAct = "";
-    render();
     startLayaWatch();
   }
 
@@ -578,7 +656,9 @@ export function mount(el, ctx) {
     layaBusy = true;
     layaBusyAct = "switch";
     layaError = "";
-    layaNote = "Switching Laya to " + to + " (stopping first, then starting).";
+    layaClickAt = Date.now(); // ORDER U1 (c): the immediate line + the 20 s nothing-changed check
+    layaClickFrom = (laya && laya.device) || "";
+    layaNote = "Switching to " + to + "... this takes up to a few minutes while the models load.";
     render();
     try {
       const r = await api("/company/laya/switch", { method: "POST", body: { device: device } });
@@ -592,10 +672,12 @@ export function mount(el, ctx) {
       await loadLaya();
     } catch (e) {
       layaError = "Could not switch Laya: " + msg(e);
+    } finally {
+      // ORDER U1 (d): a failed request must re-enable the buttons, not leave them stuck on "Working…".
+      layaBusy = false;
+      layaBusyAct = "";
+      render();
     }
-    layaBusy = false;
-    layaBusyAct = "";
-    render();
     startLayaWatch();
   }
 

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI cost audit: a report on where your model spend actually goes</title>
+<meta name="description" content="Send your own LLM usage export and get a plain report: where the money goes, spikes, possible retry loops, context bloat, a model comparison you can check, and what to test before switching.">
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f4f6f9;
+    --text: #15181e;
+    --muted: #545b67;
+    --line: #d7dbe2;
+    --accent: #1a4fd6;
+    --accent-text: #ffffff;
+    --focus: #a34a05;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --panel: #181b21;
+      --text: #eceef2;
+      --muted: #a6acb8;
+      --line: #2b3038;
+      --accent: #91b2ff;
+      --accent-text: #0c0e13;
+      --focus: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: none; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 28px 18px 56px;
+  }
+  .skip {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    background: var(--accent);
+    color: var(--accent-text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    z-index: 10;
+  }
+  .skip:focus { left: 12px; top: 12px; }
+  a { color: var(--accent); }
+  a:focus-visible, .skip:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+  h1 {
+    font-size: 1.65rem;
+    line-height: 1.25;
+    margin: 0 0 10px;
+    letter-spacing: -0.01em;
+  }
+  h2 {
+    font-size: 1.15rem;
+    margin: 34px 0 8px;
+    padding-top: 6px;
+  }
+  h3 { font-size: 1rem; margin: 18px 0 4px; }
+  p { margin: 0 0 12px; }
+  .lede { font-size: 1.05rem; color: var(--muted); margin-bottom: 18px; }
+  ul, ol { margin: 0 0 14px; padding-left: 22px; }
+  li { margin: 0 0 7px; }
+  li b { font-weight: 600; }
+  section {
+    border-top: 1px solid var(--line);
+    margin-top: 8px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .panel p:last-child, .panel ol:last-child, .panel ul:last-child { margin-bottom: 0; }
+  .field {
+    background: var(--panel);
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 0 0 12px;
+  }
+  .price {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+  .cta {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 11px 16px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--accent-text);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .cta:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 36px;
+    padding-top: 14px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  @media (max-width: 420px) {
+    .wrap { padding: 20px 14px 48px; }
+    h1 { font-size: 1.4rem; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="wrap">
+<header>
+  <h1>Find out where your AI spend actually goes</h1>
+  <p class="lede">Send the usage export you already have. Get back a plain report computed from your own numbers, not from a sales estimate.</p>
+</header>
+
+<main id="main">
+
+<section>
+  <h2>The problem</h2>
+  <p>Most teams now pay for models, agents and coding tools. The bill arrives as one line with no owner. The useful questions are simple, and usually unanswered: which feature costs the most, which day went strange, and which calls repeat because something is retrying in a loop.</p>
+</section>
+
+<section>
+  <h2>What you get</h2>
+  <p>One report, built only from the export you send:</p>
+  <ul>
+    <li><b>Where the money goes.</b> Spend by model, by day, and by the project or key tag your export already carries.</li>
+    <li><b>Spikes.</b> The days and hours that break the pattern, with the rows behind them so you can see what happened.</li>
+    <li><b>Possible retry loops.</b> Near-identical calls repeated in a short window, listed with the time gaps between them.</li>
+    <li><b>Context bloat.</b> Requests whose input is large next to the useful output, ranked by what those tokens cost you.</li>
+    <li><b>A model comparison table you can check.</b> What the same token counts would have cost on other models, with the price list used shown beside it, so you can correct any figure you disagree with.</li>
+    <li><b>What to test before switching.</b> The changes worth a measured trial, in order of expected effect on your bill.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>How it works</h2>
+  <ol>
+    <li><b>Export the CSV from your provider dashboard.</b> OpenAI, Anthropic and most gateways and proxies have a usage or billing export. Keep the raw file as it came out.</li>
+    <li><b>Send it.</b> Write to <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a> with the file attached, and say what you want to understand about the spend.</li>
+    <li><b>Receive the report.</b> Usually within a week, with a short call to walk through it if you want one.</li>
+  </ol>
+  <p class="field">{{DATA_PROMISE}}</p>
+</section>
+
+<section>
+  <h2>What this does not do</h2>
+  <ul>
+    <li>It does not promise savings. It shows what your data shows, and the decision stays yours.</li>
+    <li>It does not touch your accounts, keys or dashboards. Nothing is connected, nothing is logged into.</li>
+    <li>It does not read your prompts. The analysis runs on the export file you send, not on your code or your prompt library.</li>
+    <li>It does not guess your workload. Where a figure in the export is unclear, the report says so instead of filling the gap.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Price</h2>
+  <div class="panel">
+    <p class="price">{{PRICE}}</p>
+    <p>One audit, one fee, agreed in writing before any work starts. No subscription and no per-seat charge. If you would rather pay a share of verified savings, ask and we can talk about it.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Questions</h2>
+  <h3>Who is this for?</h3>
+  <p>Small teams and solo builders already paying for models or agent tools, where the bill has no clear owner. If your monthly spend is a rounding error, this is not worth your money yet, and the report will not pretend otherwise.</p>
+  <h3>Which export do you need?</h3>
+  <p>The usage or billing CSV your dashboard can download. If you cannot find it, say so and you will get back the exact steps for your provider.</p>
+  <h3>Do you need my API keys?</h3>
+  <p>No. Never send keys to anyone for an audit. If a vendor asks for keys to analyse your bill, walk away.</p>
+  <h3>How long does it take?</h3>
+  <p>A few working days, usually within a week of the file arriving.</p>
+  <h3>What happens to the file?</h3>
+  <p>The handling promise is stated in the steps above. Ask for it in writing, and an NDA if you need one, before you send anything.</p>
+  <h3>Can you implement the fixes too?</h3>
+  <p>The report lists what to test. Implementing the changes is a separate conversation if you want it. The audit stands on its own either way.</p>
+</section>
+
+<section>
+  <h2>Start</h2>
+  <p>Send the export, or ask a question first if you would rather check the fit.</p>
+  <p><a class="cta" href="mailto:{{CONTACT_EMAIL}}">Email {{CONTACT_EMAIL}}</a></p>
+</section>
+
+</main>
+
+<footer>
+  <p>{{BUSINESS_NAME}}</p>
+  <p>No trackers, no cookies, no analytics on this page. It is a single static file.</p>
+</footer>
+</div>
+</body>
+</html>
