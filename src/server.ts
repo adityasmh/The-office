@@ -18,7 +18,7 @@ import {
 } from "./company/org.js";
 import { runPipeline, resumeTask, reconcileStaleTasks, startBootResumeQueue, stopBootResumeQueue } from "./company/pipeline.js";
 import { flowData } from "./company/flow.js";
-import { createTask, getTask, approveGate, loadTasks, updateTask } from "./company/gates.js";
+import { createTask, getTask, approveGate, loadTasks, updateTask, normalizeRequest } from "./company/gates.js";
 import { panelData, panelRevision, panelState, type PanelPayload } from "./company/panel.js";
 import { listSessions, sessionCounts, getSession, getSessionTail, reconcileStaleSessions } from "./company/sessions.js";
 import { budgetByDepartment, budgetTotals, getBudget, listBudgets, setAllocation } from "./company/budget.js";
@@ -600,9 +600,12 @@ app.get("/company/projects/:id", (req, res) => {
 app.post("/company/projects/:id/tasks", (req, res) => {
   const p = getProject(req.params.id);
   if (!p) return res.status(404).json({ error: "not found" });
-  const { request } = req.body as { request?: string };
-  if (!request) return res.status(400).json({ error: "request required" });
-  res.json(createTask(p.id, request));
+  const { request } = req.body as { request?: unknown };
+  try {
+    res.json(createTask(p.id, normalizeRequest(request)));
+  } catch {
+    res.status(400).json({ error: "request must be a string" });
+  }
 });
 
 // Gates 1-3. Approving also resumes the task if its pipeline is not running
@@ -661,14 +664,21 @@ app.post("/company/projects/:id/resume", (req, res) => {
 // Otherwise creates one. auto=true skips gates (autonomous mode).
 app.post("/company/projects/:id/run", async (req, res) => {
   try {
-    const { request, taskId, taskHint, auto } = req.body as { request?: string; taskId?: string; taskHint?: string; auto?: boolean };
+    const { request, taskId, taskHint, auto } = req.body as { request?: unknown; taskId?: string; taskHint?: string; auto?: boolean };
     const blocked = refuseNewWork("POST /company/projects/:id/run");
     if (blocked) return res.status(503).json({ error: "company_paused", detail: blocked });
+    let requestText: string | undefined;
+    try {
+      requestText = request === undefined ? undefined : normalizeRequest(request);
+    } catch {
+      return res.status(400).json({ error: "request must be a string" });
+    }
     const existing = taskId ? getTask(req.params.id, taskId) : undefined;
-    if (!existing && !request) return res.status(400).json({ error: "request (or existing taskId) required" });
+    if (!existing && requestText === undefined) return res.status(400).json({ error: "request (or existing taskId) required" });
     // Resuming a failed task: clear the failure so the stages continue.
     if (existing?.status === "failed") updateTask(req.params.id, existing.id, { status: "pending_intake", error: undefined });
-    const handle = await runPipeline(req.params.id, request ?? existing!.rawRequest, { taskId, taskHint, auto: auto ?? false });
+    const rawRequest = requestText ?? String(existing!.rawRequest ?? "");
+    const handle = await runPipeline(req.params.id, rawRequest, { taskId, taskHint, auto: auto ?? false });
     res.json(handle);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -1872,7 +1882,7 @@ app.post("/company/laya/switch", async (req, res) => {
 // optional and the bridge no-ops safely when nothing is configured, so the
 // router must never depend on it: it starts AFTER the server is listening and
 // inside a try/catch.
-const server = app.listen(config.port, config.host, () => {
+const server = app.listen(config.port, config.host, async () => {
   console.log(
     `router on ${config.host}:${config.port} (claude=subscription oauth, ` +
       `auth=${config.authToken ? "X-Company-Token required" : "loopback-only, no secret set"})`,
@@ -1900,7 +1910,7 @@ const server = app.listen(config.port, config.host, () => {
   // Claude review -> done). Same rule as the bridge: it must never take the
   // router down, and a second watcher refuses to start (company/fleet/WATCHER.json).
   try {
-    const fleetWatch = startFleetWatcher();
+    const fleetWatch = await startFleetWatcher();
     console.log(`[fleet] watcher status: running=${fleetWatch.running} interval=${fleetWatch.intervalMs}ms`);
   } catch (e) {
     console.error(`[fleet] watcher failed to start (router continues): ${String(e)}`);

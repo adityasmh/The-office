@@ -78,7 +78,7 @@ if (spawnOrderArg) {
   process.exit(res.started.length ? 0 : 1);
 }
 
-const status = fleet.startFleetWatcher();
+const status = await fleet.startFleetWatcher();
 console.log(`[fleet-run] watcher: running=${status.running} interval=${status.intervalMs}ms`);
 if (!status.running) {
   console.error("[fleet-run] another fleet watcher is live (see company/fleet/WATCHER.json). Stop it or use --force.");

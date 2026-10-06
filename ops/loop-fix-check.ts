@@ -52,12 +52,15 @@ fs.mkdirSync(runsDir, { recursive: true });
 // code under test calls. The same trick installSyncOpTracing() uses.
 type Fn = (...args: any[]) => any;
 const rawFs = fs as unknown as Record<string, Fn>;
+const rawPromises = fs.promises as unknown as Record<string, Fn>;
 const original = {
   writeFileSync: rawFs.writeFileSync,
   renameSync: rawFs.renameSync,
   statSync: rawFs.statSync,
   readFileSync: rawFs.readFileSync,
   readdirSync: rawFs.readdirSync,
+  promisesWriteFile: rawPromises.writeFile,
+  promisesRename: rawPromises.rename,
 };
 
 let ordersTmpWrites = 0;
@@ -119,6 +122,32 @@ rawFs.readFileSync = (p: unknown, ...rest: unknown[]) => {
   return original.readFileSync(p, ...rest);
 };
 
+// LOOP-LAG (2026-10-01): saveFleetOrders now uses fs.promises for the actual I/O, so the
+// test must count those async writes as well as the sync fallback path.
+rawPromises.writeFile = async (p: unknown, data: unknown, ...rest: unknown[]) => {
+  const name = typeof p === "string" ? path.basename(p) : "";
+  if (name === "orders.json") {
+    ordersDirectWrites++;
+    if (typeof data === "string") ordersBytes += Buffer.byteLength(data);
+  } else if (name.startsWith("orders.json.tmp")) {
+    ordersTmpWrites++;
+    if (typeof data === "string") ordersBytes += Buffer.byteLength(data);
+  } else if (name === "terminals.json" || name.startsWith("terminals.json.tmp")) {
+    labelAtRegistryWrite = watchdog.busyLabel();
+  }
+  return original.promisesWriteFile(p, data, ...rest);
+};
+rawPromises.rename = async (a: unknown, b: unknown, ...rest: unknown[]) => {
+  const name = typeof b === "string" ? path.basename(b) : "";
+  if (name === "orders.json") {
+    ordersCommits++;
+    labelAtOrdersRename = watchdog.busyLabel();
+  } else if (name === "terminals.json") {
+    labelAtRegistryWrite = watchdog.busyLabel();
+  }
+  return original.promisesRename(a, b, ...rest);
+};
+
 console.log(`[loop-fix-check] throwaway COMPANY_ROOT=${companyRoot}`);
 
 // ── FIX 1: the fleet tick must not rewrite orders.json when nothing changed ──
@@ -136,7 +165,7 @@ const seedOrder = (id: string): FleetOrder => ({
   trace: [{ ts: "2026-10-01T00:00:00.000Z", from: "CEO", to: "Claude (manager)", what: "order", detail: "loop-fix-check" }],
 });
 
-fleet.saveFleetOrders([seedOrder("foLoopFix1")]);
+await fleet.saveFleetOrders([seedOrder("foLoopFix1")]);
 check("seed written", fs.existsSync(ordersPath), `orders.json at ${ordersPath}`);
 
 // AFTER the fix: 5 passes over a set with nothing to change.
@@ -184,9 +213,9 @@ check("the in-process read agrees with the file", inProcess.status === diskOrder
 // ── Integration: the REAL watcher loop the router runs (not just direct tick calls) ──
 // Same public entry point the router uses at boot (startFleetWatcher -> tickFleet on a timer).
 console.log("\n== Integration: startFleetWatcher() (the router's own fleet path) ==");
-fleet.saveFleetOrders([seedOrder("foLoopFix2")]);
+await fleet.saveFleetOrders([seedOrder("foLoopFix2")]);
 process.env.FLEET_WATCH_INTERVAL_MS = "400";
-const watcher = fleet.startFleetWatcher();
+const watcher = await fleet.startFleetWatcher();
 check("the real fleet watcher started on the temp COMPANY_ROOT", watcher.running === true, `intervalMs=${watcher.intervalMs}`);
 resetCounters();
 await sleep(2500); // real timer ticks at FLEET_WATCH_INTERVAL_MS=400
@@ -323,7 +352,7 @@ brain.clearCheapFailures("loop-fix-check:1");
 
 // reaper registry save: saveTerminals() writes company/terminals.json atomically.
 labelAtRegistryWrite = "";
-terminalReaper.saveTerminals([]);
+await terminalReaper.saveTerminals([]);
 check("reaper registry save sets a real breadcrumb", labelAtRegistryWrite === "reaper registry save", `label="${labelAtRegistryWrite}"`);
 check("the breadcrumb is restored after each call", watchdog.busyLabel() === before, `label="${watchdog.busyLabel()}"`);
 

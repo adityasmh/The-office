@@ -10,7 +10,7 @@ import { callClaudeSubscription } from "../claudeSubscription.js";
 import { pickBrain, noteCheapFailure, clearCheapFailures } from "./brainRouter.js";
 import { callGatewayModel } from "../gateway.js";
 // The plain "sign-in expired" sentence, shared with the run cards and the briefing.
-import { CLAUDE_SIGNIN_EXPIRED_MESSAGE, mentionsClaudeSignInExpired } from "./claudeSignIn.js";
+import { CLAUDE_SIGNIN_EXPIRED_MESSAGE, claudeSignInCheck, mentionsClaudeSignInExpired, probeClaudeSignIn } from "./claudeSignIn.js";
 import type { TraceStep } from "./gates.js";
 // Budget pressure (docs/BUDGET_SPEC.md §2, integration requested by BUDGET/otter): a hard
 // filter AFTER Laya, a parallelism cap, and a queue for new non-urgent orders under red.
@@ -485,10 +485,10 @@ async function doSaveFleetOrders(orders: FleetOrder[], data: string): Promise<vo
  * immediately so the event loop never waits for the tmp write/rename; concurrent calls are
  * queued in order and cannot corrupt the file with interleaved writes.
  */
-export function saveFleetOrders(orders: FleetOrder[]): void {
+export function saveFleetOrders(orders: FleetOrder[]): Promise<void> {
   const data = JSON.stringify(orders, null, 2);
   if (lastSavedOrdersJson !== null && lastSavedOrdersJson === data && process.env.FLEET_SAVE_ALWAYS !== "1") {
-    return; // nothing changed since our last write: skip the tmp write + rename entirely
+    return Promise.resolve(); // nothing changed since our last write: skip the tmp write + rename entirely
   }
   lastSavedOrdersJson = data;
   pendingOrdersKey++;
@@ -497,6 +497,7 @@ export function saveFleetOrders(orders: FleetOrder[]): void {
   ordersWriteQueue = ordersWriteQueue.then(() => doSaveFleetOrders(current, data)).catch((e) => {
     console.warn(`[fleet] queued save failed (${String(e).slice(0, 120)})`);
   });
+  return ordersWriteQueue;
 }
 
 function touched(o: FleetOrder): void {
@@ -1485,9 +1486,12 @@ async function spawnWorkerWindow(order: FleetOrder, wo: WorkOrder): Promise<{ pi
   const launcher = await launcherScript(order, wo);
   const repo = repoRoot();
   const argLine = `-NoLogo -NoExit -ExecutionPolicy Bypass -File "${launcher}"`;
+  // CEO 2026-10-06: the router must never put a terminal on screen. Hidden is the default;
+  // FLEET_VISIBLE_TERMINALS=1 is the only way back to a visible window.
+  const windowStyle = process.env.FLEET_VISIBLE_TERMINALS === "1" ? "" : "-WindowStyle Hidden ";
   const inner =
     `Start-Process -FilePath 'powershell' ` +
-    `-ArgumentList ${psQuote(argLine)} ` +
+    `-ArgumentList ${psQuote(argLine)} ${windowStyle}` +
     `-WorkingDirectory ${psQuote(repo)} -PassThru | Select-Object -ExpandProperty Id`;
   const attempts = 3;
   let detail = "";
@@ -1712,7 +1716,7 @@ async function planOrReviewModel(
    * the count would never reach 2 - the climb would never fire where it is needed most.
    */
   failureKey?: string,
-): Promise<{ text: string; via: "claude" | "kimi"; detail: string; gate?: { tier: string; model: string; reason: string } }> {
+): Promise<{ text: string; via: "claude" | "kimi"; detail: string; gate?: { tier: string; model: string; reason: string }; costUsd?: number }> {
   // NY-RESOLVER: CEO explicitly chose to skip Claude and use the gateway fallback.
   if (forceVia === "kimi") {
     return fallbackAsk(system, user, " (forced by CEO choice)");
@@ -1734,7 +1738,8 @@ async function planOrReviewModel(
     // CHEAP BY DEFAULT: hand the gate's decision back to the caller so the trace can say
     // which tier actually ran (a `none` tier is a Go gateway model, not Claude).
     const gate = r.brain ? { tier: r.brain.tier, model: r.brain.model, reason: r.brain.reason } : undefined;
-    return { text, via: "claude", detail: `${model}`, ...(gate ? { gate } : {}) };
+    const costUsd = (r as { costUsd?: number }).costUsd;
+    return { text, via: "claude", detail: `${model}`, costUsd, ...(gate ? { gate } : {}) };
   } catch (e) {
     const why = String(e).slice(0, 160);
     const signInLost = mentionsClaudeSignInExpired(e);
@@ -2243,6 +2248,35 @@ async function planOrder(orderId: string, forceAutoApprove = false): Promise<voi
   const orders = loadFleetOrders();
   const order = orders.find((o) => o.id === orderId);
   if (!order) return;
+
+  // FLEET-LOGIN PREFLIGHT: confirm the Claude CLI login with a cheap real `claude -p`
+  // probe before spending a planner call. The credential file is only an early warning;
+  // the probe is what proves the session can actually refresh and run.
+  const signInCheck = await probeClaudeSignIn();
+  if (!signInCheck.ok) {
+    order.status = "failed";
+    order.plannerPid = undefined;
+    order.error = CLAUDE_SIGNIN_EXPIRED_MESSAGE;
+    pushTrace(order, {
+      from: "Claude (manager)",
+      to: "CEO",
+      what: "plan failed",
+      detail: `${signInCheck.reason} (${CLAUDE_SIGNIN_EXPIRED_MESSAGE})`,
+    });
+    touched(order);
+    saveFleetOrders(orders);
+    void askCeoViaInbox({
+      kind: "question",
+      title: "Claude sign-in expired",
+      question: CLAUDE_SIGNIN_EXPIRED_MESSAGE,
+      source: { type: "fleet-login", id: order.id },
+    });
+    return;
+  }
+  if (signInCheck.aboutToExpire && signInCheck.probe) {
+    console.warn(`[fleet] ${signInCheck.probe}`);
+  }
+
   // RESUME_SPEC 1: claim the planning with our pid and count the attempt, so a boot
   // after a crash can tell "planning never finished" from "planning succeeded".
   order.planAttempts = (order.planAttempts ?? 0) + 1;
@@ -2312,7 +2346,7 @@ async function planOrder(orderId: string, forceAutoApprove = false): Promise<voi
     if (inlineFiles.length) phases.inlineFiles = inlineFiles.map((f) => f.rel);
     let climbNoted = false;
 
-    type PlannerStep = { text: string; via: string; detail: string; gate?: { tier: string; model: string; reason: string } };
+    type PlannerStep = { text: string; via: string; detail: string; gate?: { tier: string; model: string; reason: string }; costUsd?: number };
     const askPlanner = async (opts2: { retry?: boolean; escalate?: boolean } = {}): Promise<PlannerStep> => {
       if (opts2.escalate) {
         // CHEAP BY DEFAULT (docs/CHEAP_BY_DEFAULT_SPEC.md Job 2): the gate climbs ONE tier - Sonnet -
@@ -2328,7 +2362,10 @@ async function planOrder(orderId: string, forceAutoApprove = false): Promise<voi
       if (planned.via === "kimi") {
         pushTrace(order, { from: "Fleet", to: "Claude (manager)", what: "planner via kimi", detail: planned.detail });
       }
-      return { text: planned.text, via: planned.via, detail: planned.detail, ...(planned.gate ? { gate: planned.gate } : {}) };
+      if (planned.costUsd != null) {
+        phases.costUsd = ((phases.costUsd as number | undefined) ?? 0) + planned.costUsd;
+      }
+      return { text: planned.text, via: planned.via, detail: planned.detail, costUsd: planned.costUsd, ...(planned.gate ? { gate: planned.gate } : {}) };
     };
 
     try {
@@ -3429,7 +3466,7 @@ function pushRestartHop(o: FleetOrder, what: string, to: string, detail: string)
  * safe and can never duplicate their derived item.
  */
 async function askCeoViaInbox(input: {
-  kind: "approval" | "choice";
+  kind: "approval" | "choice" | "question";
   title: string;
   question: string;
   options?: string[];
@@ -3829,15 +3866,35 @@ export async function tickFleet(): Promise<{ advanced: number; reviewed: number;
     // the 611 KB orders.json write on every tick even when nothing else changed. Real mutations
     // already refresh updatedAt via pushTrace/touched at their call sites.
   }
-    saveFleetOrders(orders);
+    await saveFleetOrders(orders);
     return { advanced, reviewed, orders: orders.length };
   }));
   await fillSlots();
   return result;
 }
 
-export function startFleetWatcher(): { intervalMs: number; running: boolean } {
+export async function startFleetWatcher(): Promise<{ intervalMs: number; running: boolean }> {
   if (watcherTimer) return { intervalMs: watchIntervalMs(), running: true };
+  // FLEET-LOGIN STARTUP GUARD: refuse to run the fleet watcher when the Claude CLI
+  // login is missing or the real `claude -p` probe reports a sign-in failure. The
+  // credential file is only an early warning; the probe is what proves the session
+  // can actually refresh and run. This is loud (console error + INBOX item) so the
+  // CEO sees the real fix instead of a stream of dead orders.
+  const signInCheck = await probeClaudeSignIn();
+  if (!signInCheck.ok) {
+    const msg = `[fleet] FATAL: ${signInCheck.reason} ${CLAUDE_SIGNIN_EXPIRED_MESSAGE}`;
+    console.error(msg);
+    void askCeoViaInbox({
+      kind: "question",
+      title: "Claude sign-in expired",
+      question: CLAUDE_SIGNIN_EXPIRED_MESSAGE,
+      source: { type: "fleet-login", id: "startup" },
+    });
+    return { intervalMs: watchIntervalMs(), running: false };
+  }
+  if (signInCheck.aboutToExpire && signInCheck.probe) {
+    console.warn(`[fleet] ${signInCheck.probe}`);
+  }
   // One watcher only. Two watchers would double-review (exactly the duplicate-
   // bridge incident this repo already had with Slack), so a second process
   // refuses unless FLEET_FORCE=1.
