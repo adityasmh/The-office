@@ -20,3 +20,6 @@ Every item below comes from a real gap seen today, not a guess. Each would be a 
 
 ## Not recommended
 - Auto-merge of fleet PRs. The merge gate should stay human.
+
+Shipped 2026-10-06: env scrub, stuck detector, auto redo, agent mailbox and a safe web reader.
+Trial: scrub on, second attempt.
