@@ -6,6 +6,7 @@ implementation (`src/server.ts` routes at lines 1282-1330, `src/company/fleet.ts
 cross-checked against `docs/FLEET_SPEC.md` and `docs/FLEET_CHECK_CONTRACT.md`.
 
 Route IDs used by docs and the check script: **create, list, detail, approve, redo, cancel**.
+Verified missing/needed files (2026-10-06): none are missing. `docs/FLEET_SPEC.md`, `docs/FLEET_SELFCHECK.md`, `docs/FLEET_GATE_SPEC.md`, `docs/FLEET_CHECK_CONTRACT.md`, `src/company/fleet.ts`, `src/company/claudeSignIn.ts`, `ops/fleet-run.ts`, `ops/fleet-status.ts`, `ops/fleet-tick.ts`, `ops/fleet-write-plan.ts`, `ops/fleet-selftest.ts`, `ops/fleet-http-probe.ts`, `ops/fleet-deliver-probe.ts` and `scripts/fleet_check.py` all exist.
 
 ## 1. Overview
 
@@ -342,7 +343,9 @@ UI should check `model` and `modelSource` before blaming the worker.
 
 ## 4. Quick check without touching anything: scripts/fleet_check.py
 
-A read-only checker. It never sends a POST/PUT/DELETE/PATCH.
+A read-only python checker. It never sends a POST/PUT/DELETE/PATCH (contract in
+`docs/FLEET_CHECK_CONTRACT.md`). For a TypeScript health check that also compares disk state with
+the HTTP answer, use `npx tsx ops/fleet-health-check.ts` (section 4b).
 
 ```powershell
 python scripts/fleet_check.py            # against http://127.0.0.1:8787
@@ -367,6 +370,34 @@ What it does (contract in `docs/FLEET_CHECK_CONTRACT.md`):
 
 This is the safe way to "run something locally" against the live router: the two GETs touch nothing,
 and the four mutating routes are proven by parsing the source rather than firing real requests.
+
+## 4b. TypeScript health check: ops/fleet-health-check.ts
+
+```powershell
+npx tsx ops/fleet-health-check.ts
+```
+
+Observed 2026-10-06 against the live router (the same output, pasted verbatim, lives in
+`docs/FLEET_HEALTHCHECK_EXPECTED.md`, written by the CHECK teammate):
+
+```
+fleet root : C:\Users\user\Desktop\Default Project\company\fleet
+PASS  fleet root directory exists -- C:\Users\user\Desktop\Default Project\company\fleet
+PASS  fleet order store parses -- 61 order(s), no parse errors
+PASS  running work orders hold live sessions -- 12 live client session(s)
+PASS  router answers GET /company/fleet -- 61 order(s) over HTTP at http://127.0.0.1:8787
+PASS  router and disk agree on order count -- disk=61 http=61
+PASS  fleet watcher is running on the live router -- http running=true interval=5000ms; module running=false interval=5000ms
+PASS  GET /company/fleet -> orders + limits + watcher -- HTTP 200 for /company/fleet
+PASS  GET /company/fleet/orders/:id (fomuwctyjf) -- HTTP 200 for /company/fleet/orders/fomuwctyjf
+
+[health-check] 8/8 checks passed. FLEET BACKEND HEALTHY
+EXIT=0
+```
+
+The rule, confirmed by reading the script: exit **0** plus `FLEET BACKEND HEALTHY` means the fleet
+backend is healthy. exit **1** plus one plain `FAIL` line means the router is not reachable (the
+script never starts a server, never spawns anything, and only ever sends GETs).
 
 ## 5. Spec vs code
 
@@ -400,5 +431,119 @@ the code is what runs; this guide documents the code.
    the code matches (`sessionLive(..., maxLines = 15)` supplies the ~15 tail lines) and additionally
    adds `live.model` (the model the session itself reports, falling back to the picked `model`),
    plus `reportPath` per work order. The spec mentions neither.
-7. **Order ids.** The spec shows no id format; the code uses `fo` + base36 epoch ms
-   (`fleet.ts` createFleetOrder), which the guide's examples reflect.
+7. **Order ids.** The spec shows no id format; the code uses `fo` + base36 epoch ms (`fleet.ts`
+   createFleetOrder), which the guide's examples reflect.
+
+## 6. What to do when something fails (plain-language walkthrough)
+
+(Cross-checked against `docs/FLEET_SPEC.md`; the distinction between the two failure kinds below
+is verified in `src/company/fleet.ts` and `src/company/claudeSignIn.ts`.)
+
+When a fleet order fails, first READ what printed on its card. The failure lands in one of two
+broad kinds, and the right move differs:
+
+**Kind A - Something a retry CAN fix (transient).** Examples (from the real code paths):
+
+- A spend limit or rate limit from a provider (never classified as sign-in; `orderFailureCause`
+  puts those in the `provider-limit` bucket, `needsYouRule.ts:150`).
+- A gateway or fallback that did not answer (an outage; the order error says the planner's main
+  AND fallback `LLM` both failed, with both errors included).
+- A worker session died and no `REPORT.md` appeared (the watcher marks the WORK ORDER `failed`
+  after `120s` of a missing session with no report; other work may still be running).
+
+For kind A, the fleet retries on its own, in two layers, each already bounded in code:
+
+1. **Bounded automatic retries within one order.** The planner retries at most
+   `FLEET_PLAN_MAX_ATTEMPTS` times in a row (constant `planMaxAttempts()`, default **3**,
+   `fleet.ts:316`); before it retries the order's `error` reads
+   `planning attempt N/FLEET_PLAN_MAX_ATTEMPTS failed: ...` and a trace hop says so.
+   Per-work-order REVIEW retries are similarly bounded (`reviewAttempts` vs `reviewRetries()`;
+   when the cap is spent the error says `review failed Nx` or `review could not run`).
+2. **Bounded re-issue of the whole job by the manager layer.** If the order still fails, the
+   needs-you manager layer automatically re-issues the job (a fresh order id carrying the same
+   text) at most `FLEET_ORDER_MAX_RETRIES` times, default **2** (`maxOrderRetries()`,
+   `needsYouRule.ts:140`). After that the resolver refuses to mint another copy and raises ONE
+   plain "this keeps failing, the cause has to be fixed first" briefing item instead of an endless
+   retry prompt. When you see that item, DO NOT just re-run the same order again - the retry
+   budget is deliberately spent; find the root cause or drop it (cancel) and re-order differently.
+
+So the human rule is simple: **for kind A, wait one manager retry cycle. If the same failure
+returns after the bounded retries are used, do NOT queue another retry of the same order -
+troubleshoot the root cause instead.**
+
+**Kind B - The expired-login case (the special one).** When Claude's sign-in has EXPIRED, the
+planner cannot authenticate at all, and retrying cannot fix it (only a person re-logging in can).
+We measured this before (`claudeSignIn.ts` comments, 2026-09-30) and the code now fails the order
+ONCE with exactly one plain sentence and NO retry prompt:
+
+> `Claude sign-in expired: the CEO must run claude /login in a terminal`
+
+If you see that sentence on the order card (`order.error`) or in the order's trace
+(what="plan failed"), the ONLY fix is a human re-login at a terminal (not a retry button):
+
+```powershell
+claude /login
+```
+
+After re-login, start a NEW fleet order for the same GOAL (do not try to revive the failed
+order id). The expired-login case is specifically NOT put into the bounded retry loop
+(`fleet.ts:2448-2456`) precisely because nothing automatic fixes it.
+
+To TELL kind B apart from anything else (how the predicate decides),
+`mentionsClaudeSignInExpired` (src/company/claudeSignIn.ts:48) matches these shapes and nothing
+else: `failed to authenticate`, `oauth session expired`, `could not be refreshed`,
+`claude oauth refresh`, `invalid_grant`, `credentials not found`, `no claudeaioauth block`,
+`claude /login`. It deliberately does NOT match a 429 spend/rate limit, a timeout, a spawn
+ENOENT, or a message that merely contains the word "login" - those keep their own (retryable)
+handling. If you need the live check run against the real machine, that is AUTH work
+(`ops/fleet-signin-predicate-check.ts`, `ops/fleet-live-signin-preview.ts`); this guide does not
+duplicate it.
+
+## 7. Existing scripts the operator may see, and what each one is for (do not run casually)
+
+| Script | Read-only? | What it does |
+|---|---|---|
+| `ops/fleet-status.ts` | yes | prints every order, one line each (or one order in full with `--order`) |
+| `ops/fleet-tick.ts` | no | runs exactly ONE watcher pass (advances real state; used when a review is stuck) |
+| `ops/fleet-run.ts` | no | drives a whole order end to end without HTTP (same code the routes run); flags: `--text --auto-approve --approve --watch --redo <order>:<wid> --cancel --spawn-order --mock --force --max --timeout` |
+| `ops/fleet-write-plan.ts` | no | hand-writes (or replaces) a plan+workorders on an existing order, manager-only; use `--order <id> --file plan.json [--approve]` |
+| `ops/fleet-status.ts --order <id> --tail N` | yes | full detail of one order incl. per-worker live tail |
+| `npx tsx ops/fleet-run.ts` (no args) | yes | prints its own usage and exits (no state change) |
+| `python scripts/fleet_check.py [--base URL]` | yes | the six-route contract check (2 live GETs, 4 static source checks) |
+| `npx tsx ops/fleet-health-check.ts` | yes | 8 PASS/FAIL lines + summary; compares disk with HTTP (section 4b) |
+| `npx tsx ops/fleet-selftest.ts` | no | state-machine selftest against a THROWAWAY company root; never touches live company/ |
+| `npx tsx ops/fleet-deliver-probe.ts` | no | opens one real visible jcode window in a throwaway repo to prove targeted delivery (`--keep` to leave it open); never touches live company/ |
+| `npx tsx ops/fleet-http-probe.ts [--order <id>]` | yes | read-only HTTP check of the routes over the live API; needs the router running |
+
+Real outputs you can compare with (all run 2026-10-06 on the live repo):
+
+- `npx tsx ops/fleet-status.ts --order fomuo1rv2o` printed a full detail record (order
+  status, per work order state/verdict/review/live tail) plus the `plan:` text and the `trace`
+  hops - see the `company/fleet/fomuo1rv2o/GUIDE/REPORT.md` of this work order for the full dump.
+- `npx tsx ops/fleet-run.ts` (no args) printed:
+
+  ```
+  usage: tsx ops/fleet-run.ts --text "<order>" [--auto-approve] [--timeout 900] [--mock]
+         tsx ops/fleet-run.ts --approve <orderId> [--timeout 900]
+         tsx ops/fleet-run.ts --watch <orderId>
+         tsx ops/fleet-run.ts --redo <orderId>:<workOrderId>
+         tsx ops/fleet-run.ts --cancel <orderId>
+         tsx ops/fleet-run.ts --spawn-order <orderId>[/<wid>] [--max N]
+  ```
+
+- `npx tsx ops/fleet-status.ts --order nousuchid` printed exactly `no such fleet order: nousuchid`.
+- `npx tsx ops/fleet-health-check.ts` printed `8/8 checks passed. FLEET BACKEND HEALTHY` with exit 0
+  (full output in section 4b).
+
+## 8. Files every operator may want open
+
+- `company/fleet/orders.json`: the whole order list (61 Orders as of 2026-10-06), one JSON object
+  per order with its work orders, trace, plan and error fields - the same data the dashboard
+  polls, but on disk.
+- `company/fleet/<orderId>/<workOrderId>/REPORT.md`: each worker's finish report; its existence is
+  what moves the work order to `reported` and triggers the manager's review.
+- `company/fleet/<orderId>/BOARD.jsonl`: the peer-note board between work orders (AUTH -> GUIDE
+  notes etc.), written by `ops/agent-msg.ts` (needs `FLEET_TALK=1`).
+- `docs/FLEET_SELFCHECK.md` (by an earlier work order): remembers the self-check scripts in other
+  words, with route and shape references.
+
