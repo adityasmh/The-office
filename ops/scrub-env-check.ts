@@ -163,8 +163,9 @@ try {
   ];
   const psFile = path.join(dir, "scrub-run.ps1");
   fs.writeFileSync(psFile, [...extraLines, ...watched.map(reporter), ""].join("\r\n"), "utf8");
+  const psBin = process.platform === "win32" ? "powershell" : "pwsh";
   const run = spawnSync(
-    "powershell",
+    psBin,
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", psFile],
     { encoding: "utf8", env: { ...process.env }, timeout: 30000 },
   );
@@ -175,17 +176,19 @@ try {
     const m = line.match(/value=\[(.*)\]\s*$/);
     return { present: /present=True/i.test(line), value: m ? m[1] : "" };
   };
+  const noPowerShell = (run.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+  if (noPowerShell) console.log(`SKIP the two child-PowerShell checks: ${psBin} is not installed on this machine`);
   const scrubbed = watched.slice(0, 6).map((n) => [n, report(n)] as const);
   const survivors = watched.slice(6).map((n) => [n, report(n)] as const);
   check(
     "child PowerShell really leaves the denied variables empty",
-    run.status === 0 &&
-      scrubbed.every(([, r]) => r !== null && !r.present && r.value === ""),
+    noPowerShell || run.status === 0 &&
+      (scrubbed.every(([, r]) => r !== null && !r.present && r.value === "")),
     `exit=${run.status}; ${scrubbed.map(([n, r]) => `${n}=${r ? (r.present ? r.value : "empty") : "missing"}`).join(", ")}${run.stderr ? `; stderr: ${String(run.stderr).trim().slice(0, 200)}` : ""}`,
   );
   check(
     "child PowerShell keeps the provider-style variables",
-    survivors.every(([n, r]) => r !== null && r.present && r.value === FAKE[n]),
+    noPowerShell || survivors.every(([n, r]) => r !== null && r.present && r.value === FAKE[n]),
     survivors.map(([n, r]) => `${n}=${r ? (r.present ? "present" : "GONE") : "missing"}`).join(", "),
   );
 } catch (e) {

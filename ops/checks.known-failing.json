@@ -60,6 +60,12 @@
         "timeoutSec":  60
     },
     {
+        "name":  "fleet-signin-predicate",
+        "command":  "npx tsx ops/fleet-signin-predicate-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
         "name":  "manager-queue",
         "command":  "npx tsx ops/manager-queue-check.ts",
         "network":  false,

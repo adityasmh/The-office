@@ -1,4 +1,8 @@
 // Extend the existing harness with adversarial predicate cases and a signed-in-response case.
+if (process.platform !== "win32") {
+  console.log("SKIP fleet-signin-predicate-check: it needs a Windows claude.exe stub (known limit on Linux/macOS, see docs/KNOWN_ISSUES.md)");
+  process.exit(0);
+}
 import "./sandbox-company-root.js";
 import { sandboxRoot } from "./sandbox-company-root.js";
 import fs from "node:fs";

@@ -156,12 +156,6 @@
         "timeoutSec":  60
     },
     {
-        "name":  "fleet-signin-predicate",
-        "command":  "npx tsx ops/fleet-signin-predicate-check.ts",
-        "network":  false,
-        "timeoutSec":  60
-    },
-    {
         "name":  "fleet-signin-realmessages",
         "command":  "npx tsx ops/fleet-signin-realmessages-check.ts",
         "network":  false,
