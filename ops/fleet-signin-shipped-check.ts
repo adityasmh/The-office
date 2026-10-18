@@ -39,6 +39,9 @@ if (process.platform === "win32") {
   fs.writeFileSync(src, ["public class Program {", "  public static int Main(string[] a) {", `    System.Console.WriteLine(${JSON.stringify(payload)});`, "    return 1;", "  }", "}"].join("\n"));
   const { execFileSync } = await import("node:child_process");
   execFileSync(path.join(process.env.WINDIR ?? "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"), ["/nologo", `/out:${claudeExe}`, src], { stdio: "inherit" });
+} else {
+  // POSIX stand-in for the not-signed-in CLI: print the error payload, exit 1.
+  fs.writeFileSync(claudeExe, `#!/bin/sh\nprintf '%s\\n' '${payload.replace(/'/g, "")}'\nexit 1\n`, { mode: 0o755 });
 }
 process.env.CLAUDE_BIN = claudeExe;
 
