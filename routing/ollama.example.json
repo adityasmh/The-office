@@ -1,0 +1,11 @@
+{
+  "_comment": "Fully local: an Ollama server on this machine. No key needed (set LOCAL_API_KEY=none). Pull the models first: ollama pull qwen2.5-coder:7b",
+  "gateway": { "baseUrl": "http://127.0.0.1:11434/v1", "keyEnv": "LOCAL_API_KEY" },
+  "tiers": {
+    "routine": "qwen2.5-coder:7b",
+    "standard": "qwen2.5-coder:7b",
+    "complex": "qwen2.5-coder:14b",
+    "complexAlt": "qwen2.5-coder:14b"
+  },
+  "allowedFamilies": ["qwen", "llama", "deepseek", "mistral"]
+}

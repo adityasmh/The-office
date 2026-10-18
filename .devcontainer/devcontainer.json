@@ -1,0 +1,29 @@
+{
+  "name": "internal-llm-router (mock mode)",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspaces/app",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/app,type=bind",
+  "remoteUser": "node",
+  "forwardPorts": [8787],
+  "portsAttributes": {
+    "8787": {
+      "label": "router (mock mode)",
+      "onAutoForward": "notify"
+    }
+  },
+  "containerEnv": {
+    "MOCK_MODE": "1",
+    "PORT": "8787",
+    "HOST": "0.0.0.0",
+    "COMPANY_AUTH_TOKEN": "local-mock-mode-not-a-secret"
+  },
+  "postCreateCommand": "npm ci",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.vscode-typescript-next"]
+    }
+  }
+}

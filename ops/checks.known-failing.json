@@ -1,0 +1,74 @@
+[
+    {
+        "name":  "budget-laya-state",
+        "command":  "npx tsx ops/budget-laya-state-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "deepseek-only",
+        "command":  "npx tsx ops/deepseek-only-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "fleet-fallback-flakiness",
+        "command":  "npx tsx ops/fleet-fallback-flakiness-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "fleet-review-gullibility",
+        "command":  "npx tsx ops/fleet-review-gullibility-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-review-path",
+        "command":  "npx tsx ops/fleet-review-path-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-review-shipped",
+        "command":  "npx tsx ops/fleet-review-shipped-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-review-verdict",
+        "command":  "npx tsx ops/fleet-review-verdict-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-review-verdict-second-pair",
+        "command":  "npx tsx ops/fleet-review-verdict-second-pair-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-signin-fallback-variant",
+        "command":  "npx tsx ops/fleet-signin-fallback-variant-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "fleet-signin-overreach",
+        "command":  "npx tsx ops/fleet-signin-overreach-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "manager-queue",
+        "command":  "npx tsx ops/manager-queue-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "planner-toolcall",
+        "command":  "npx tsx ops/planner-toolcall-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    }
+]

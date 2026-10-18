@@ -1,0 +1,16 @@
+{
+  "domains": [
+    "github.com",
+    "raw.githubusercontent.com",
+    "docs.github.com",
+    "developer.mozilla.org",
+    "nodejs.org",
+    "typescriptlang.org",
+    "npmjs.com",
+    "news.ycombinator.com",
+    "dev.to",
+    "arxiv.org",
+    "wikipedia.org",
+    "stackoverflow.com"
+  ]
+}

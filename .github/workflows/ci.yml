@@ -1,0 +1,41 @@
+# ci: one job that type-checks and runs every offline check.
+# The check list lives in ops/checks.manifest.json; `npx tsx ops/run-all-checks.ts`
+# runs each one in turn and exits 1 on any FAIL or TIMEOUT.
+#
+# NOTE: this fleet was developed on Windows. A few checks assume Windows and will
+# fail on this ubuntu-latest runner (a hard-coded Chrome path, nvidia-smi, .ps1
+# helpers, PowerShell-flavoured process handling). Those checks are NOT skipped
+# here on purpose - CI should show them red until they are made portable - and the
+# ones expected to fail are listed in docs/overnight/REPORT_F08-run-all-checks.md
+# (guessed from their source, not yet observed on Linux). Checks marked
+# "network": true in the manifest are skipped, since CI has no live router.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run every offline check
+        run: npx tsx ops/run-all-checks.ts

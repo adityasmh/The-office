@@ -1,0 +1,19 @@
+{
+  "_comment": "The built-in defaults, written out. OpenCode Go gateway (one key, many models) + DeepSeek/GLM families. Copy to ../routing.policy.json and edit.",
+  "gateway": { "baseUrl": "https://opencode.ai/zen/go/v1", "keyEnv": "OPENCODE_API_KEY" },
+  "tiers": {
+    "routine": "glm-5.3-flash",
+    "standard": "deepseek-v4-flash",
+    "complex": "kimi-k2.7-code",
+    "complexAlt": "qwen3.8-flash"
+  },
+  "allowedFamilies": ["deepseek", "glm"],
+  "direct": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "peakUtcBlocks": [[1, 4], [6, 10]],
+    "peakWeekdaysOnly": true,
+    "offPeakMultiplier": 0.5,
+    "boundaryBufferMinutes": 45
+  }
+}

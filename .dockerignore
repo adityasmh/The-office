@@ -1,0 +1,47 @@
+# Build-context exclusions (order F11-docker; see docs/DOCKER.md).
+# Mirrors the secret and heavy-directory rules in .gitignore so the daemon never
+# receives a key, a model, a dataset or a local log.
+
+# Secrets and local config. .env.example is the template and stays in the context.
+.env
+.env.*
+!.env.example
+
+# Installed dependencies and build output (the image installs its own).
+node_modules
+dist
+
+# Runtime data and logs (bind/named volumes at runtime, never baked in).
+company
+company-temp-*
+logs
+*.log
+*.pid
+
+# Local tooling, models and vendor drops.
+deps
+models
+vendor
+dev
+tools
+release
+release-prev
+release-staging
+
+# VCS and editor state.
+.git
+.github
+.claude
+.opencode
+
+# Scratch files at the project root (tmp-*, tmp_* and the shell-mangled names).
+tmp-*
+tmp_*
+%*%
+x.sessionName
+replay_validate.txt
+$($_.to)
+
+# Personal and local-only docs.
+docs/cv
+docs/perf

@@ -1,0 +1,11 @@
+{
+  "_comment": "OpenRouter: one OpenAI-compatible endpoint, many vendors. Put OPENROUTER_API_KEY in .env. Model ids are examples; use any ids your account can call.",
+  "gateway": { "baseUrl": "https://openrouter.ai/api/v1", "keyEnv": "OPENROUTER_API_KEY" },
+  "tiers": {
+    "routine": "openai/gpt-4o-mini",
+    "standard": "deepseek/deepseek-chat",
+    "complex": "anthropic/claude-sonnet-4.5",
+    "complexAlt": "google/gemini-2.5-pro"
+  },
+  "allowedFamilies": ["openai/", "deepseek/", "anthropic/", "google/"]
+}

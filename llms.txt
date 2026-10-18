@@ -1,0 +1,16 @@
+# The Office
+
+> Local multi-agent coding "company": plans plain-text orders, runs guarded coding-agent workers in parallel, reviews their work, and asks a human before anything risky. Product-agnostic, provider-agnostic, mock mode needs no keys.
+
+Start here:
+- [AGENTS.md](AGENTS.md): rules, vocabulary, commands, code map
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): diagrams of the order pipeline and routing
+- [docs/EXTENDING.md](docs/EXTENDING.md): add a product, a provider, an integration
+- [docs/ROUTING_POLICY.md](docs/ROUTING_POLICY.md): choose gateway and models in routing.policy.json
+- [docs/FLEET_OPERATOR_GUIDE.md](docs/FLEET_OPERATOR_GUIDE.md): the fleet HTTP API
+- [docs/CEO_RUNBOOK.md](docs/CEO_RUNBOOK.md): trust boundary, launch, shutdown ("CEO" = the human operator)
+- [docs/PITFALLS.md](docs/PITFALLS.md): mistakes not to repeat
+- [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md): checks that are red on a fresh clone, and why
+- [.env.example](.env.example): every setting
+
+Run: `npm install && npx tsx ops/setup.ts && npm run dev` (mock mode, port 8787). Verify: `npm run typecheck && npm run check:all`.

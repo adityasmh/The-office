@@ -1,0 +1,22 @@
+{
+  "_comment": "Copy to products.json. Each entry is a repo the office can build and verify. Leadscout is just an example; delete it or keep it.",
+  "products": [
+    {
+      "id": "leadscout",
+      "name": "Leadscout",
+      "path": "../leadscout",
+      "description": "Local-business lead finder (Node 24 + SQLite). https://github.com/adityasmh/Leadscout",
+      "start": { "command": "npm start", "port": 8790, "healthUrl": "http://127.0.0.1:8790/api/health" },
+      "checks": ["npm run typecheck", "npm run check:env", "npm run check:all"],
+      "env": ["LEADSCOUT_PORT", "LEADSCOUT_DB", "LEADSCOUT_PLUGINS"]
+    },
+    {
+      "id": "my-web-app",
+      "name": "My web app",
+      "path": "../my-web-app",
+      "description": "Any other repo: give it a path, a way to start it, and the commands that prove a change is good.",
+      "start": { "command": "npm run dev", "port": 3000, "healthUrl": "http://127.0.0.1:3000/" },
+      "checks": ["npm test"]
+    }
+  ]
+}

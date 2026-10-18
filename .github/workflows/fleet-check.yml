@@ -1,0 +1,34 @@
+# fleet-check: PR checks feed the fleet review.
+# A red check on a pull request downgrades a fleet PASS to REDO, so this must stay green.
+name: fleet-check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "fleet/**"
+
+permissions:
+  contents: read
+
+jobs:
+  fleet-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run fleet GitHub check harness
+        run: npx tsx ops/github-check.ts

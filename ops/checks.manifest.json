@@ -1,0 +1,398 @@
+[
+    {
+        "name":  "adaptive",
+        "command":  "npx tsx ops/adaptive-check.ts",
+        "network":  true,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "agent-talk",
+        "command":  "npx tsx ops/agent-talk-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "assistant-brain",
+        "command":  "npx tsx ops/assistant-brain-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "auto-redo",
+        "command":  "npx tsx ops/auto-redo-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "brain-gate-post-restart",
+        "command":  "npx tsx ops/brain-gate-post-restart-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "brain-stats-cache",
+        "command":  "npx tsx ops/brain-stats-cache-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "budget-guard-direct",
+        "command":  "npx tsx ops/budget-guard-direct-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "budget-override",
+        "command":  "npx tsx ops/budget-override-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "budget-real",
+        "command":  "npx tsx ops/budget-real-check.ts",
+        "network":  true,
+        "timeoutSec":  240
+    },
+    {
+        "name":  "budget-rows",
+        "command":  "node ops/budget-rows-check.mjs",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "cheap-default",
+        "command":  "npx tsx ops/cheap-default-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "cost-report",
+        "command":  "npx tsx ops/cost-report-check.ts",
+        "network":  false,
+        "timeoutSec":  240
+    },
+    {
+        "name":  "deepseek-fallback",
+        "command":  "npx tsx ops/deepseek-fallback-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "deepseek-offpeak",
+        "command":  "npx tsx ops/deepseek-offpeak-check.ts",
+        "network":  true,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "deepseek-policy",
+        "command":  "npx tsx ops/deepseek-policy-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "doctor",
+        "command":  "npx tsx ops/doctor-check.ts",
+        "network":  false,
+        "timeoutSec":  240
+    },
+    {
+        "name":  "env-reload",
+        "command":  "npx tsx ops/env-reload-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-budget",
+        "command":  "npx tsx ops/fleet-budget-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-cap",
+        "command":  "npx tsx ops/fleet-cap-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-cheapplan",
+        "command":  "npx tsx ops/fleet-cheapplan-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-cli",
+        "command":  "npx tsx ops/fleet-cli-check.ts",
+        "network":  false,
+        "timeoutSec":  180
+    },
+    {
+        "name":  "fleet-github",
+        "command":  "npx tsx ops/fleet-github-check.ts",
+        "network":  true,
+        "timeoutSec":  180
+    },
+    {
+        "name":  "fleet-planner-fallback",
+        "command":  "npx tsx ops/fleet-planner-fallback-check.ts",
+        "network":  true,
+        "timeoutSec":  300
+    },
+    {
+        "name":  "fleet-retry",
+        "command":  "npx tsx ops/fleet-retry-check.ts",
+        "network":  true,
+        "timeoutSec":  180
+    },
+    {
+        "name":  "fleet-signin-briefing",
+        "command":  "npx tsx ops/fleet-signin-briefing-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-signin-precedence",
+        "command":  "npx tsx ops/fleet-signin-precedence-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-signin-predicate",
+        "command":  "npx tsx ops/fleet-signin-predicate-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-signin-realmessages",
+        "command":  "npx tsx ops/fleet-signin-realmessages-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-signin-shipped",
+        "command":  "npx tsx ops/fleet-signin-shipped-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "fleet-stuck-review",
+        "command":  "npx tsx ops/fleet-stuck-review-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "github",
+        "command":  "npx tsx ops/github-check.ts",
+        "network":  false,
+        "timeoutSec":  180
+    },
+    {
+        "name":  "laya-control",
+        "command":  "npx tsx ops/laya-control-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "loop-fix",
+        "command":  "npx tsx ops/loop-fix-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "loop-lag",
+        "command":  "npx tsx ops/loop-lag-check.ts",
+        "network":  true,
+        "timeoutSec":  180
+    },
+    {
+        "name":  "merge-paths",
+        "command":  "npx tsx ops/merge-paths-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "metrics",
+        "command":  "npx tsx ops/metrics-check.ts",
+        "network":  true,
+        "timeoutSec":  240
+    },
+    {
+        "name":  "model-policy",
+        "command":  "npx tsx ops/model-policy-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "muse-lane",
+        "command":  "npx tsx ops/muse-lane-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "muse-lane-logic",
+        "command":  "npx tsx ops/muse-lane-logic-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "muse-lane-spread",
+        "command":  "npx tsx ops/muse-lane-spread-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "needs-you-rule",
+        "command":  "npx tsx ops/needs-you-rule-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "command":  "npx tsx ops/new-order-check.ts",
+        "name":  "new-order",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "command":  "npx tsx ops/notify-check.ts",
+        "name":  "notify",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "ops-cap",
+        "command":  "npx tsx ops/ops-cap-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "ops-parse-order",
+        "command":  "npx tsx ops/ops-parse-order-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "ops-worker-order",
+        "command":  "npx tsx ops/ops-worker-order-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "order-report",
+        "command":  "npx tsx ops/order-report-check.ts",
+        "network":  true,
+        "timeoutSec":  180
+    },
+    {
+        "command":  "npx tsx ops/policy-check.ts",
+        "name":  "policy",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "products",
+        "command":  "npx tsx ops/products-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "resume-view",
+        "command":  "npx tsx ops/resume-view-check.ts",
+        "network":  true,
+        "timeoutSec":  300
+    },
+    {
+        "name":  "reviewer-inputs",
+        "command":  "npx tsx ops/reviewer-inputs-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "review-noverdict",
+        "command":  "npx tsx ops/review-noverdict-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    },
+    {
+        "name":  "routing-policy",
+        "command":  "npx tsx ops/routing-policy-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "scope",
+        "command":  "npx tsx ops/scope-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "scrub-env",
+        "command":  "npx tsx ops/scrub-env-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "secret-scan",
+        "command":  "npx tsx ops/secret-scan-check.ts",
+        "network":  false,
+        "timeoutSec":  180
+    },
+    {
+        "name":  "sessions",
+        "command":  "npx tsx ops/sessions-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "setup",
+        "command":  "npx tsx ops/setup-check.ts",
+        "network":  false,
+        "timeoutSec":  300
+    },
+    {
+        "name":  "start-view",
+        "command":  "npx tsx ops/start-view-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "stt-fallback",
+        "command":  "npx tsx ops/stt-fallback-check.ts",
+        "network":  true,
+        "timeoutSec":  240
+    },
+    {
+        "name":  "stuck",
+        "command":  "npx tsx ops/stuck-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "taskstore",
+        "command":  "npx tsx ops/taskstore-check.ts",
+        "network":  false,
+        "timeoutSec":  90
+    },
+    {
+        "name":  "ui-assistant",
+        "command":  "npx tsx ops/ui-assistant-check.ts",
+        "network":  true,
+        "timeoutSec":  240
+    },
+    {
+        "name":  "voice-route",
+        "command":  "npx tsx ops/voice-route-check.ts",
+        "network":  true,
+        "timeoutSec":  180
+    },
+    {
+        "name":  "web-read",
+        "command":  "npx tsx ops/web-read-check.ts",
+        "network":  false,
+        "timeoutSec":  120
+    },
+    {
+        "name":  "workers-view",
+        "command":  "npx tsx ops/workers-view-check.ts",
+        "network":  false,
+        "timeoutSec":  60
+    }
+]

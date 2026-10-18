@@ -1,0 +1,11 @@
+{
+  "_comment": "Plain OpenAI. Put OPENAI_API_KEY in .env. Any OpenAI-compatible server (Ollama, vLLM, LM Studio) works the same way: change baseUrl and the model ids.",
+  "gateway": { "baseUrl": "https://api.openai.com/v1", "keyEnv": "OPENAI_API_KEY" },
+  "tiers": {
+    "routine": "gpt-4o-mini",
+    "standard": "gpt-4.1-mini",
+    "complex": "gpt-4.1",
+    "complexAlt": "gpt-4.1"
+  },
+  "allowedFamilies": ["gpt", "o1", "o3", "o4"]
+}

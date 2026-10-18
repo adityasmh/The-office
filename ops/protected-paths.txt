@@ -1,0 +1,50 @@
+# Protected paths - do not edit without the owner's approval (CEO order 2026-09-30).
+#
+# Format: one path per line, relative to the repo root (or absolute).
+# A trailing slash marks a directory; its whole tree is fingerprinted.
+# Blank lines and lines starting with "#" are ignored.
+#
+# Enforcement: ops/guard-protected.ps1 -Snapshot | -Check | -Booting
+# -Snapshot writes ops/.protected-baseline.json (path + size + SHA256 + mtime).
+# -Check re-hashes and exits non-zero on any change/appear/vanish, and refuses
+#   when a router boot is in flight.
+#
+# Justifications cite docs/AGENT_COORDINATION.md ownership rows where available.
+# Boot-critical files with no ownership row are treated as shared: say before editing.
+
+# Shared: say before editing (AGENT_COORDINATION.md ownership table, line 11). Boot-critical entry point.
+src/server.ts
+# jcode / rose (AGENT_COORDINATION.md ownership table, line 10).
+src/config.ts
+# jcode / rose (AGENT_COORDINATION.md ownership table, line 10). Secrets: never edit without owner.
+.env
+# jcode / rose (AGENT_COORDINATION.md ownership table, line 10).
+.env.example
+# Boot-critical shared infra, no ownership row. Shared: say before editing.
+package.json
+# Boot-critical shared infra, no ownership row. Shared: say before editing.
+package-lock.json
+# Boot-critical shared infra, no ownership row. Shared: say before editing.
+tsconfig.json
+# Router supervisor; boot-critical. Built/owned by CRASHFIX (AGENT_COORDINATION.md supervisor + self-healing notes).
+ops/router-supervisor.ps1
+# Restart path; boot-critical. Do not restart :8787 (manager/CRASHFIX only).
+ops/run-server-detached.ps1
+# Shared: say before editing (line 11); ASSISTANT-BRAIN owns since 18:35 (line 358).
+src/company/assistant.ts
+# Claude Code, manager brain + pipeline (AGENT_COORDINATION.md ownership table, line 9).
+src/company/pipeline.ts
+# Claude Code, manager brain + pipeline (AGENT_COORDINATION.md ownership table, line 9).
+src/company/gates.ts
+# REPORTING / mushroom (AGENT_COORDINATION.md line 358).
+src/company/briefing.ts
+# CHEAP-DEFAULT / orangutan (AGENT_COORDINATION.md lines 5167, 5203).
+src/company/brainRouter.ts
+# FLEET-BACKEND / bonehound (AGENT_COORDINATION.md lines 358, 3646, 5059).
+src/company/fleet.ts
+# MEMORY / session_blossom (AGENT_COORDINATION.md line 485).
+src/company/knowledge.ts
+# AUTOCLOSE / REAPER-ASYNC / chipmunk (AGENT_COORDINATION.md lines 2293, 3106).
+src/company/terminalReaper.ts
+# Live company data directory. NEVER start a server against this; always a temp COMPANY_ROOT.
+company/
