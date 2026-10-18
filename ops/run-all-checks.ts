@@ -26,6 +26,21 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
+
+// Hermetic home: the checks must not depend on (or touch) the real ~/.claude login of whoever runs them.
+// Every child gets a throw-away HOME holding a FAKE credentials file with a far-future expiry, so code that
+// only asks "is a Claude login present?" sees one, and nothing real is ever read or refreshed.
+// Opt out with CHECK_REAL_HOME=1 (then the checks see your real home, as before).
+const CHECK_HOME = process.env.CHECK_REAL_HOME === "1" ? null : fs.mkdtempSync(path.join(os.tmpdir(), "check-home-"));
+if (CHECK_HOME) {
+  fs.mkdirSync(path.join(CHECK_HOME, ".claude"), { recursive: true });
+  fs.writeFileSync(
+    path.join(CHECK_HOME, ".claude", ".credentials.json"),
+    JSON.stringify({ claudeAiOauth: { accessToken: "fake-check-token", refreshToken: "fake-check-refresh", expiresAt: 4102444800000 } }),
+  );
+  process.on("exit", () => { try { fs.rmSync(CHECK_HOME, { recursive: true, force: true }); } catch { /* best effort */ } });
+}
 
 const HARNESS_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HARNESS_DIR, "..");
@@ -177,7 +192,11 @@ export function runCheck(entry: CheckEntry, cwd: string): Promise<CheckResult> {
         shell: true,
         windowsHide: true,
         detached: process.platform !== "win32",
-        env: { ...process.env, RUN_ALL_CHECKS_CHILD: "1" },
+        env: {
+        ...process.env,
+        RUN_ALL_CHECKS_CHILD: "1",
+        ...(CHECK_HOME ? { HOME: CHECK_HOME, USERPROFILE: CHECK_HOME, CLAUDE_CREDENTIALS_PATH: path.join(CHECK_HOME, ".claude", ".credentials.json") } : {}),
+      },
       });
     } catch (e) {
       settle({ name: entry.name, command: entry.command, status: "FAIL", seconds: 0, output: `spawn failed: ${msg(e)}` });

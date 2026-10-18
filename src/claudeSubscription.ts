@@ -22,7 +22,7 @@ import { airgappedBlock } from "./company/airGap.js";
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const MESSAGES_URL = "https://api.anthropic.com/v1/messages?beta=true";
-const CRED_PATH = path.join(os.homedir(), ".claude", ".credentials.json");
+const CRED_PATH = process.env.CLAUDE_CREDENTIALS_PATH ?? path.join(os.homedir(), ".claude", ".credentials.json");
 
 type StoredCreds = {
   claudeAiOauth?: {
