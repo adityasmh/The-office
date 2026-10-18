@@ -34,6 +34,8 @@ npx tsx ops/doctor.ts     # PASS / WARN / FAIL per requirement, with a one-line 
 npm run dev               # router + dashboard on http://127.0.0.1:8787
 ```
 
+Linux/macOS notes: `ops/doctor.ts` will show `FAIL jcode` and an empty `OPENCODE_API_KEY`; both are expected in mock mode. A boot line `[fleet] FATAL: Claude credentials not found` is also expected without a Claude login: the fleet watcher stays off, the dashboard and mock mode work. `npm run check:all` runs the checks in a throw-away HOME with a fake credentials file, so your real `~/.claude` is never read.
+
 Open <http://127.0.0.1:8787/> for the dashboard and <http://127.0.0.1:8787/v2/#/fleet> for the Fleet view where you create
 an order and approve its plan. In mock mode no provider is called; `src/mock.ts` plays the models. When you want the real
 thing: put your keys in `.env`, choose a policy (below), install a worker CLI, and run `npx tsx ops/setup.ts --live`.
